@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package rpc;
+
+option go_package = "github.com/jsndz/bottle/rpc/proto";
+
+message Request {
+  uint64 id = 1;
+  string method = 2;
+  bytes payload = 3;
+}
+
+message Response {
+  uint64 id = 1;
+  bytes payload = 2;
+  string error = 3;
+}
