@@ -15,17 +15,17 @@ func handleConn(conn net.Conn, handler *Handler) {
 		return
 	}
 
-	req := &pb.Request{}
+	req := &pb.Message{}
 	if err := proto.Unmarshal(buf, req); err != nil {
 		return
 	}
 
 	fn, ok := handler.Get(req.Method)
-	var res *pb.Response
+	var res *pb.Message
 	if !ok {
-		res = &pb.Response{
-			Id:    req.Id,
-			Error: "method not found: " + req.Method,
+		res = &pb.Message{
+			Id:      req.Id,
+			Payload: []byte("method not found: " + req.Method),
 		}
 	} else {
 		res = fn(req)

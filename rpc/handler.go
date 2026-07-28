@@ -2,7 +2,7 @@ package rpc
 
 import pb "github.com/jsndz/bottle/rpc/proto"
 
-type HandleFunc func(*pb.Request) *pb.Response
+type HandleFunc func(*pb.Message) *pb.Message
 
 type Handler struct {
 	Methods map[string]HandleFunc

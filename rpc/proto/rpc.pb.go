@@ -2,16 +2,17 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.36.0--rc1
-// source: rpc.proto
+// source: rpc/proto/rpc.proto
 
 package proto
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -21,30 +22,85 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Request struct {
+type FrameType int32
+
+const (
+	FrameType_UNARY       FrameType = 0
+	FrameType_STREAM_DATA FrameType = 1
+	FrameType_STREAM_END  FrameType = 2
+	FrameType_HEARTBEAT   FrameType = 3
+)
+
+// Enum value maps for FrameType.
+var (
+	FrameType_name = map[int32]string{
+		0: "UNARY",
+		1: "STREAM_DATA",
+		2: "STREAM_END",
+		3: "HEARTBEAT",
+	}
+	FrameType_value = map[string]int32{
+		"UNARY":       0,
+		"STREAM_DATA": 1,
+		"STREAM_END":  2,
+		"HEARTBEAT":   3,
+	}
+)
+
+func (x FrameType) Enum() *FrameType {
+	p := new(FrameType)
+	*p = x
+	return p
+}
+
+func (x FrameType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FrameType) Descriptor() protoreflect.EnumDescriptor {
+	return file_rpc_proto_rpc_proto_enumTypes[0].Descriptor()
+}
+
+func (FrameType) Type() protoreflect.EnumType {
+	return &file_rpc_proto_rpc_proto_enumTypes[0]
+}
+
+func (x FrameType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FrameType.Descriptor instead.
+func (FrameType) EnumDescriptor() ([]byte, []int) {
+	return file_rpc_proto_rpc_proto_rawDescGZIP(), []int{0}
+}
+
+type Message struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Method        string                 `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Type          FrameType              `protobuf:"varint,2,opt,name=type,proto3,enum=rpc.FrameType" json:"type,omitempty"`
+	Headers       map[string]string      `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Method        string                 `protobuf:"bytes,4,opt,name=method,proto3" json:"method,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,5,opt,name=payload,proto3" json:"payload,omitempty"`
+	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Request) Reset() {
-	*x = Request{}
-	mi := &file_rpc_proto_msgTypes[0]
+func (x *Message) Reset() {
+	*x = Message{}
+	mi := &file_rpc_proto_rpc_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Request) String() string {
+func (x *Message) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Request) ProtoMessage() {}
+func (*Message) ProtoMessage() {}
 
-func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[0]
+func (x *Message) ProtoReflect() protoreflect.Message {
+	mi := &file_rpc_proto_rpc_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -55,151 +111,125 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Request.ProtoReflect.Descriptor instead.
-func (*Request) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{0}
+// Deprecated: Use Message.ProtoReflect.Descriptor instead.
+func (*Message) Descriptor() ([]byte, []int) {
+	return file_rpc_proto_rpc_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Request) GetId() uint64 {
+func (x *Message) GetId() uint32 {
 	if x != nil {
 		return x.Id
 	}
 	return 0
 }
 
-func (x *Request) GetMethod() string {
+func (x *Message) GetType() FrameType {
+	if x != nil {
+		return x.Type
+	}
+	return FrameType_UNARY
+}
+
+func (x *Message) GetHeaders() map[string]string {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *Message) GetMethod() string {
 	if x != nil {
 		return x.Method
 	}
 	return ""
 }
 
-func (x *Request) GetPayload() []byte {
+func (x *Message) GetPayload() []byte {
 	if x != nil {
 		return x.Payload
 	}
 	return nil
 }
 
-type Response struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Response) Reset() {
-	*x = Response{}
-	mi := &file_rpc_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Response) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Response) ProtoMessage() {}
-
-func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_rpc_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Response.ProtoReflect.Descriptor instead.
-func (*Response) Descriptor() ([]byte, []int) {
-	return file_rpc_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *Response) GetId() uint64 {
-	if x != nil {
-		return x.Id
-	}
-	return 0
-}
-
-func (x *Response) GetPayload() []byte {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
-func (x *Response) GetError() string {
+func (x *Message) GetError() string {
 	if x != nil {
 		return x.Error
 	}
 	return ""
 }
 
-var File_rpc_proto protoreflect.FileDescriptor
+var File_rpc_proto_rpc_proto protoreflect.FileDescriptor
 
-const file_rpc_proto_rawDesc = "" +
+const file_rpc_proto_rpc_proto_rawDesc = "" +
 	"\n" +
-	"\trpc.proto\x12\x03rpc\"K\n" +
-	"\aRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x16\n" +
-	"\x06method\x18\x02 \x01(\tR\x06method\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload\"J\n" +
-	"\bResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05errorB#Z!github.com/jsndz/bottle/rpc/protob\x06proto3"
+	"\x13rpc/proto/rpc.proto\x12\x03rpc\"\xf6\x01\n" +
+	"\aMessage\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12\"\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x0e.rpc.FrameTypeR\x04type\x123\n" +
+	"\aheaders\x18\x03 \x03(\v2\x19.rpc.Message.HeadersEntryR\aheaders\x12\x16\n" +
+	"\x06method\x18\x04 \x01(\tR\x06method\x12\x18\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\x1a:\n" +
+	"\fHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*F\n" +
+	"\tFrameType\x12\t\n" +
+	"\x05UNARY\x10\x00\x12\x0f\n" +
+	"\vSTREAM_DATA\x10\x01\x12\x0e\n" +
+	"\n" +
+	"STREAM_END\x10\x02\x12\r\n" +
+	"\tHEARTBEAT\x10\x03B#Z!github.com/jsndz/bottle/rpc/protob\x06proto3"
 
 var (
-	file_rpc_proto_rawDescOnce sync.Once
-	file_rpc_proto_rawDescData []byte
+	file_rpc_proto_rpc_proto_rawDescOnce sync.Once
+	file_rpc_proto_rpc_proto_rawDescData []byte
 )
 
-func file_rpc_proto_rawDescGZIP() []byte {
-	file_rpc_proto_rawDescOnce.Do(func() {
-		file_rpc_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_rpc_proto_rawDesc), len(file_rpc_proto_rawDesc)))
+func file_rpc_proto_rpc_proto_rawDescGZIP() []byte {
+	file_rpc_proto_rpc_proto_rawDescOnce.Do(func() {
+		file_rpc_proto_rpc_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_rpc_proto_rpc_proto_rawDesc), len(file_rpc_proto_rpc_proto_rawDesc)))
 	})
-	return file_rpc_proto_rawDescData
+	return file_rpc_proto_rpc_proto_rawDescData
 }
 
-var file_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_rpc_proto_goTypes = []any{
-	(*Request)(nil),  // 0: rpc.Request
-	(*Response)(nil), // 1: rpc.Response
+var file_rpc_proto_rpc_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_rpc_proto_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_rpc_proto_rpc_proto_goTypes = []any{
+	(FrameType)(0),  // 0: rpc.FrameType
+	(*Message)(nil), // 1: rpc.Message
+	nil,             // 2: rpc.Message.HeadersEntry
 }
-var file_rpc_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+var file_rpc_proto_rpc_proto_depIdxs = []int32{
+	0, // 0: rpc.Message.type:type_name -> rpc.FrameType
+	2, // 1: rpc.Message.headers:type_name -> rpc.Message.HeadersEntry
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_rpc_proto_init() }
-func file_rpc_proto_init() {
-	if File_rpc_proto != nil {
+func init() { file_rpc_proto_rpc_proto_init() }
+func file_rpc_proto_rpc_proto_init() {
+	if File_rpc_proto_rpc_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rpc_proto_rawDesc), len(file_rpc_proto_rawDesc)),
-			NumEnums:      0,
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rpc_proto_rpc_proto_rawDesc), len(file_rpc_proto_rpc_proto_rawDesc)),
+			NumEnums:      1,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_rpc_proto_goTypes,
-		DependencyIndexes: file_rpc_proto_depIdxs,
-		MessageInfos:      file_rpc_proto_msgTypes,
+		GoTypes:           file_rpc_proto_rpc_proto_goTypes,
+		DependencyIndexes: file_rpc_proto_rpc_proto_depIdxs,
+		EnumInfos:         file_rpc_proto_rpc_proto_enumTypes,
+		MessageInfos:      file_rpc_proto_rpc_proto_msgTypes,
 	}.Build()
-	File_rpc_proto = out.File
-	file_rpc_proto_goTypes = nil
-	file_rpc_proto_depIdxs = nil
+	File_rpc_proto_rpc_proto = out.File
+	file_rpc_proto_rpc_proto_goTypes = nil
+	file_rpc_proto_rpc_proto_depIdxs = nil
 }

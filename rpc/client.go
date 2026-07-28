@@ -1,14 +1,19 @@
 package rpc
 
 import (
+	"context"
 	"net"
 
 	pb "github.com/jsndz/bottle/rpc/proto"
 	"google.golang.org/protobuf/proto"
 )
 
-func Call(port string, req *pb.Request) (*pb.Response, error) {
+func Call(ctx context.Context, port string, req *pb.Message) (*pb.Message, error) {
 	conn, err := net.Dial("tcp", ":"+port)
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +33,7 @@ func Call(port string, req *pb.Request) (*pb.Response, error) {
 		return nil, err
 	}
 
-	resp := &pb.Response{}
+	resp := &pb.Message{}
 	if err := proto.Unmarshal(respBytes, resp); err != nil {
 		return nil, err
 	}
