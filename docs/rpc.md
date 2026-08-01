@@ -37,3 +37,4 @@ client decides max number of connection and based on that
 conn pool will be created.
 If the connection pool is empty || all existing connection are busy then the connection will be created upto max
 if not client need to wait
+THere is a global connection pool for each client with each server M:N

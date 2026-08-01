@@ -41,12 +41,17 @@ func (c *Client) NewConnection() *Connection {
 	}
 }
 
-func (c *Client) Call(ctx context.Context, port string, req *pb.Message) (*pb.Message, error) {
-	connection := c.Pool.Get(port)
+// Call is UNARY
+func (c *Client) Call(ctx context.Context, method string, payload []byte, headers map[string]string) (*pb.Message, error) {
+	connection := c.Pool.Get(c.Port)
 	conn := *connection.Conn
 	deadline, ok := ctx.Deadline()
 	if ok {
 		conn.SetDeadline(deadline)
+	}
+	req, err := UnaryMessage(method, payload, headers)
+	if err != nil {
+		return nil, err
 	}
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
@@ -66,8 +71,50 @@ func (c *Client) Call(ctx context.Context, port string, req *pb.Message) (*pb.Me
 	if err := proto.Unmarshal(respBytes, resp); err != nil {
 		return nil, err
 	}
-	if resp.Type == pb.FrameType_STREAM_END || resp.Type == pb.FrameType_UNARY {
-		c.Pool.Release(port, connection.ID)
+	if resp.Type == pb.FrameType_UNARY {
+		c.Pool.Release(c.Port, connection.ID)
 	}
 	return resp, nil
+}
+
+// client side it for asking data
+
+func (c *Client) StartStream(ctx context.Context, method string, payload []byte, headers map[string]string) (<-chan *pb.Message, error) {
+	connection := c.Pool.Get(c.Port)
+	conn := *connection.Conn
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
+	req, err := StreamRequestMessage(method, payload, headers)
+	if err != nil {
+		return nil, err
+	}
+	reqBytes, err := proto.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writeFrame(conn, reqBytes); err != nil {
+		return nil, err
+	}
+	ch := make(chan *pb.Message, 100)
+	go func() {
+		defer close(ch)
+		defer c.Pool.Release(c.Port, connection.ID)
+
+		for {
+			respBytes, err := readFrame(conn)
+			if err != nil {
+				return
+			}
+			resp := &pb.Message{}
+			proto.Unmarshal(respBytes, resp)
+			ch <- resp
+			if resp.Type == pb.FrameType_STREAM_END {
+				break
+			}
+		}
+	}()
+	return ch, nil
 }

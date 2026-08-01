@@ -6,9 +6,10 @@ option go_package = "github.com/jsndz/bottle/rpc/proto";
 
 enum FrameType {
   UNARY = 0;
-  STREAM_DATA=  1;
-  STREAM_END= 2;
-  HEARTBEAT = 3;
+  STREAM_START = 1;
+  STREAM_DATA= 2;
+  STREAM_END= 3;
+  HEARTBEAT = 4;
 }
 
 message Message {

@@ -20,13 +20,15 @@ type ConnPool struct {
 	Addr    string
 	MaxConn uint8
 	Conns   map[string]*Connection
+	cond    sync.Cond
 }
 
 func (c *ConnPool) Get() *Connection {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, conn := range c.Conns {
 		if !conn.Busy {
+			conn.Busy = true
+			c.mu.Unlock()
 			return conn
 		}
 	}
@@ -43,20 +45,22 @@ func (c *ConnPool) Get() *Connection {
 		}
 		c.Conns[conn.ID] = &conn
 		conn.Busy = true
+		c.mu.Unlock()
 
 		return &conn
 	}
-	return nil
+	c.cond.Wait()
+	return c.Get()
 }
 
 func (c *ConnPool) Release(addr, id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	connection := c.Conns[addr]
+	connection := c.Conns[id]
 
 	connection.Busy = false
 	connection.LastUsed = time.Now()
-
+	c.cond.Signal()
 }
 
 type GlobalPool struct {
@@ -65,11 +69,14 @@ type GlobalPool struct {
 }
 
 func NewConnectionPool(port string, max uint8) *ConnPool {
-	return &ConnPool{
+	p := &ConnPool{
 		Addr:    port,
 		MaxConn: max,
 		Conns:   make(map[string]*Connection),
+		mu:      sync.Mutex{},
 	}
+	p.cond.L = &p.mu
+	return p
 }
 
 func NewGlobalPool() *GlobalPool {
@@ -80,12 +87,13 @@ func NewGlobalPool() *GlobalPool {
 
 func (gp *GlobalPool) Get(addr string) *Connection {
 	gp.mu.Lock()
-	defer gp.mu.Unlock()
 	pool, ok := gp.NetPool[addr]
 	if !ok {
 		pool = NewConnectionPool(addr, 10)
 		gp.NetPool[addr] = pool
 	}
+	gp.mu.Unlock()
+
 	conn := pool.Get()
 	return conn
 }
