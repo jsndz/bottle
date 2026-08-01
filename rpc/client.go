@@ -2,6 +2,10 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"math"
+	"math/rand"
+
 	"net"
 	"time"
 
@@ -11,10 +15,11 @@ import (
 )
 
 type Client struct {
-	ID      string
-	Pool    *GlobalPool
-	MaxConn uint8
-	Port    string
+	ID       string
+	Pool     *GlobalPool
+	MaxConn  uint8
+	MaxRetry uint
+	Port     string
 }
 
 func NewClient(port string, maxConn uint8, pool *GlobalPool) *Client {
@@ -48,6 +53,7 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 	deadline, ok := ctx.Deadline()
 	if ok {
 		conn.SetDeadline(deadline)
+		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
 	}
 	req, err := UnaryMessage(method, payload, headers)
 	if err != nil {
@@ -59,6 +65,9 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 	}
 
 	if err := writeFrame(conn, reqBytes); err != nil {
+		var retries uint
+		retries = 0
+		err := c.Retry(ctx, conn, reqBytes, &retries)
 		return nil, err
 	}
 
@@ -79,14 +88,14 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 }
 
 // client side it for asking data
-
 func (c *Client) StartStream(ctx context.Context, method string, payload []byte, headers map[string]string) (<-chan *pb.Message, error) {
 	connection := c.Pool.Get(c.Port)
 	conn := *connection.Conn
-	deadline, ok := ctx.Deadline()
-	if ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
+		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
 	}
+
 	req, err := StreamRequestMessage(method, payload, headers)
 	if err != nil {
 		return nil, err
@@ -118,4 +127,21 @@ func (c *Client) StartStream(ctx context.Context, method string, payload []byte,
 		}
 	}()
 	return ch, nil
+}
+
+func (c *Client) Retry(ctx context.Context, conn net.Conn, payload []byte, retry *uint) error {
+	if *retry >= c.MaxRetry {
+		return errors.New("")
+	}
+	err := writeFrame(conn, payload)
+	exp := time.Duration(math.Pow(2, float64(*retry))) * time.Second
+	jitter := time.Duration(rand.Intn(500)) * time.Millisecond
+
+	t := exp + jitter
+	if err != nil {
+		time.Sleep(t)
+		*retry++
+		c.Retry(ctx, conn, payload, retry)
+	}
+	return err
 }

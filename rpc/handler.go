@@ -1,10 +1,18 @@
 package rpc
 
-import pb "github.com/jsndz/bottle/rpc/proto"
+import (
+	"context"
 
-type HandleFunc func(*pb.Message) *pb.Message
+	pb "github.com/jsndz/bottle/rpc/proto"
+)
 
-type StreamFunc func(*pb.Message, *ServerStream)
+type HandleFunc func(context.Context, *pb.Message) *pb.Message
+
+type StreamFunc func(context.Context, *pb.Message, *ServerStream)
+
+type Middlewares func(HandleFunc) HandleFunc
+
+type StreamMiddleware func(StreamFunc) StreamFunc
 
 type Handler struct {
 	Methods       map[string]HandleFunc
@@ -18,8 +26,14 @@ func NewHandler() *Handler {
 	}
 }
 
-func (h *Handler) AddHandler(method string, fn HandleFunc) {
-	h.Methods[method] = fn
+func (h *Handler) AddHandler(method string, fn HandleFunc, middlewares []Middlewares) {
+	wrapped := fn
+
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		wrapped = middlewares[i](wrapped)
+	}
+
+	h.Methods[method] = wrapped
 }
 
 func (h *Handler) Get(method string) (HandleFunc, bool) {
@@ -27,8 +41,12 @@ func (h *Handler) Get(method string) (HandleFunc, bool) {
 	return fn, ok
 }
 
-func (h *Handler) AddStreamHandler(method string, fn StreamFunc) {
-	h.StreamMethods[method] = fn
+func (h *Handler) AddStreamHandler(method string, fn StreamFunc, middlewares []StreamMiddleware) {
+	wrapped := fn
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		wrapped = middlewares[i](wrapped)
+	}
+	h.StreamMethods[method] = wrapped
 }
 
 func (h *Handler) GetStreamMethod(method string) (StreamFunc, bool) {
