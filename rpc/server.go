@@ -3,7 +3,6 @@ package rpc
 import (
 	"net"
 
-	"github.com/google/uuid"
 	pb "github.com/jsndz/bottle/rpc/proto"
 	"google.golang.org/protobuf/proto"
 )
@@ -32,21 +31,26 @@ func handleConn(conn net.Conn, handler *Handler) {
 			return
 		}
 		var res *pb.Message
+		if req.Type == pb.FrameType_HEARTBEAT {
+			res = &pb.Message{
+				Id:   req.Id,
+				Type: pb.FrameType_HEARTBEAT,
+			}
 
-		if req.Type == pb.FrameType_STREAM_START {
-			fn, ok := handler.GetStreamMethod(req.Method)
+			data, err := proto.Marshal(res)
+			if err != nil {
+				return
+			}
+			_ = writeFrame(conn, data)
+			continue
+		} else if req.Type == pb.FrameType_STREAM_START {
+			fn, _ := handler.GetStreamMethod(req.Method)
 			stream := &ServerStream{
-				id:   uuid.New().ID(),
+				id:   req.Id,
 				conn: conn,
 			}
-			if !ok {
-				res = &pb.Message{
-					Id:      req.Id,
-					Payload: []byte("method not found: " + req.Method),
-				}
-			}
 			go fn(req, stream)
-		} else {
+		} else if req.Type == pb.FrameType_UNARY {
 			fn, ok := handler.Get(req.Method)
 			if !ok {
 				res = &pb.Message{

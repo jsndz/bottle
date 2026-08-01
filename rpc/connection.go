@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
+
+	pb "github.com/jsndz/bottle/rpc/proto"
 )
 
 type Connection struct {
@@ -61,6 +64,34 @@ func (c *ConnPool) Release(addr, id string) {
 	connection.Busy = false
 	connection.LastUsed = time.Now()
 	c.cond.Signal()
+}
+func (c *ConnPool) PingTicker() {
+	ticker := time.NewTicker(time.Second * 30)
+
+	go func() {
+		for range ticker.C {
+			c.pingIdleConn()
+		}
+	}()
+}
+
+func (c *ConnPool) pingIdleConn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, conn := range c.Conns {
+		if !conn.Busy {
+			ping := &pb.Message{
+				Id:   0,
+				Type: pb.FrameType_HEARTBEAT,
+			}
+			data, err := proto.Marshal(ping)
+			if err != nil {
+
+			}
+			_ = writeFrame(*conn.Conn, data)
+		}
+	}
 }
 
 type GlobalPool struct {

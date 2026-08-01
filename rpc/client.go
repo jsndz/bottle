@@ -74,6 +74,7 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 	if resp.Type == pb.FrameType_UNARY {
 		c.Pool.Release(c.Port, connection.ID)
 	}
+
 	return resp, nil
 }
 
