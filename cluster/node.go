@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"net"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,13 +28,4 @@ func NewNode(address string) *Node {
 		Address: address,
 		State:   JOING,
 	}
-}
-
-func (n *Node) Ping() bool {
-	conn, err := net.DialTimeout("tcp", n.Address, 3*time.Second)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
 }
