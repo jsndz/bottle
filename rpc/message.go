@@ -13,7 +13,6 @@ func UnaryMessage(method string, payload []byte, headers map[string]string) (*pb
 		Headers: headers,
 		Payload: payload,
 	}
-
 	return &message, nil
 }
 

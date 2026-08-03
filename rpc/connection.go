@@ -107,6 +107,7 @@ func NewConnectionPool(port string, max uint8) *ConnPool {
 		mu:      sync.Mutex{},
 	}
 	p.cond.L = &p.mu
+	p.PingTicker()
 	return p
 }
 

@@ -38,3 +38,12 @@ conn pool will be created.
 If the connection pool is empty || all existing connection are busy then the connection will be created upto max
 if not client need to wait
 THere is a global connection pool for each client with each server M:N
+
+there are for now two ways of sending data unary and streaming
+for unary its send one message recv response and done
+streaming is continous so the node which asks for data will be 
+continously listening till the EOF is returned
+
+there are also heartbeat send through every connection in connection pool
+connection pool is a global pool 
+

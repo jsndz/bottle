@@ -10,12 +10,14 @@ import (
 )
 
 type Server struct {
-	Port string
+	Port    string
+	Handler *Handler
 }
 
 func NewServer(port string) *Server {
 	return &Server{
-		Port: port,
+		Port:    port,
+		Handler: NewHandler(),
 	}
 }
 
@@ -76,11 +78,10 @@ func handleConn(conn net.Conn, handler *Handler) {
 			}
 			_ = writeFrame(conn, data)
 		}
-
 	}
 }
 
-func (s *Server) Serve(port string, handler *Handler) error {
+func (s *Server) Serve(port string) error {
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		return err
@@ -91,6 +92,6 @@ func (s *Server) Serve(port string, handler *Handler) error {
 		if err != nil {
 			return err
 		}
-		go handleConn(conn, handler)
+		go handleConn(conn, s.Handler)
 	}
 }
