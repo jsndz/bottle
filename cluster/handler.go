@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/jsndz/bottle/rpc"
 	pb "github.com/jsndz/bottle/rpc/proto"
@@ -61,9 +62,20 @@ func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message 
 		Payload: nil,
 	}
 }
+func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Message {
+	payload, _ := json.Marshal(c.self)
+	c.self.LastPing = time.Now()
+	return &pb.Message{
+		Id:      msg.Id,
+		Type:    pb.FrameType_UNARY,
+		Method:  msg.Method,
+		Payload: payload,
+	}
+}
 
 func (c *Cluster) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("cluster.join", c.HandleJoin, nil)
 	rpcServer.Handler.AddHandler("cluster.update", c.HandleUpdate, nil)
 	rpcServer.Handler.AddHandler("cluster.left", c.HandleLeave, nil)
+	rpcServer.Handler.AddHandler("cluster.heartbeat", c.HandleHeartBeat, nil)
 }
