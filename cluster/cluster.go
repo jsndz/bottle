@@ -7,26 +7,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jsndz/bottle/rpc"
 	pb "github.com/jsndz/bottle/rpc/proto"
 )
 
 type Cluster struct {
-	id    string
+	ID    string
 	mu    sync.RWMutex
-	nodes map[string]*Node
+	Nodes map[string]*Node
 	self  *Node
 	pool  *rpc.GlobalPool
 }
 
-func NewCluster(self *Node, srv *rpc.Server) *Cluster {
-	nodes := make(map[string]*Node)
-	nodes[self.ID] = self
+func NewCluster(self *Node, srv *rpc.Server, id string) *Cluster {
+	Nodes := make(map[string]*Node)
+	Nodes[self.ID] = self
 	pool := rpc.NewGlobalPool()
 	cls := &Cluster{
-		id:    uuid.NewString(),
-		nodes: nodes,
+		ID:    id,
+		Nodes: Nodes,
 		self:  self,
 		pool:  pool,
 	}
@@ -58,8 +57,8 @@ func (c *Cluster) Join(addr string) error {
 	json.Unmarshal(resp.Payload, &cls)
 
 	c.mu.Lock()
-	c.nodes = cls.nodes
-	c.id = cls.id
+	c.Nodes = cls.Nodes
+	c.ID = cls.ID
 	c.self.State = ACTIVE
 	c.mu.Unlock()
 
@@ -70,7 +69,7 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	for _, node := range c.nodes {
+	for _, node := range c.Nodes {
 		if node.ID == c.self.ID {
 			continue
 		}
@@ -85,8 +84,8 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 func (c *Cluster) Heartbeat() {
 	payload, _ := json.Marshal(c.self)
 	c.mu.RLock()
-	peers := make([]*Node, 0, len(c.nodes))
-	for _, node := range c.nodes {
+	peers := make([]*Node, 0, len(c.Nodes))
+	for _, node := range c.Nodes {
 		if node.ID != c.self.ID {
 			peers = append(peers, node)
 		}
@@ -120,11 +119,11 @@ func (c *Cluster) Heartbeat() {
 		json.Unmarshal(msg.Payload, &node)
 
 		if msg.Error == "No Reply" {
-			c.nodes[node.ID].State = DEAD
+			c.Nodes[node.ID].State = DEAD
 			return
 		}
-		c.nodes[node.ID].State = ACTIVE
-		c.nodes[node.ID].LastPing = time.Now()
+		c.Nodes[node.ID].State = ACTIVE
+		c.Nodes[node.ID].LastPing = time.Now()
 
 	}
 
@@ -132,12 +131,12 @@ func (c *Cluster) Heartbeat() {
 
 func (c *Cluster) Leave(cl *rpc.Client) error {
 	payload, _ := json.Marshal(c.self)
-	c.id = ""
-	for _, node := range c.nodes {
+	c.ID = ""
+	for _, node := range c.Nodes {
 		if node.ID == c.self.ID {
 			continue
 		}
-		delete(c.nodes, node.ID)
+		delete(c.Nodes, node.ID)
 	}
 	c.BroadCast("cluster.left", nil, payload)
 	return nil

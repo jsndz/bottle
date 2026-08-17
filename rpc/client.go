@@ -46,6 +46,42 @@ func (c *Client) NewConnection() *Connection {
 	}
 }
 
+// PING
+
+func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
+	connection := c.Pool.Get(c.Port)
+	conn := *connection.Conn
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
+	pingMsg := &pb.Message{
+		Type: pb.FrameType_HEARTBEAT,
+	}
+	reqBytes, err := proto.Marshal(pingMsg)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writeFrame(conn, reqBytes); err != nil {
+		var retries uint
+		retries = 0
+		err := c.Retry(ctx, conn, reqBytes, &retries)
+		return nil, err
+	}
+	respBytes, err := readFrame(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &pb.Message{}
+	if err := proto.Unmarshal(respBytes, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
 // Call is UNARY
 func (c *Client) Call(ctx context.Context, method string, payload []byte, headers map[string]string) (*pb.Message, error) {
 	connection := c.Pool.Get(c.Port)

@@ -20,9 +20,19 @@ func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 			Error:  "Invalid Payload",
 		}
 	}
+	client := rpc.NewClient(joiningNode.Address, 1, c.pool)
+	_, err := client.Ping(ctx)
+	if err != nil {
+		return &pb.Message{
+			Id:     msg.Id,
+			Type:   pb.FrameType_UNARY,
+			Method: msg.Method,
+			Error:  "Can't Connect",
+		}
+	}
 	c.mu.Lock()
 	joiningNode.State = ACTIVE
-	c.nodes[joiningNode.ID] = &joiningNode
+	c.Nodes[joiningNode.ID] = &joiningNode
 	c.mu.Unlock()
 	payload, _ := json.Marshal(c)
 	c.BroadCast("cluster.update", nil, payload)
@@ -39,7 +49,7 @@ func (c *Cluster) HandleUpdate(ctx context.Context, msg *pb.Message) *pb.Message
 	var cls Cluster
 	json.Unmarshal(msg.Payload, &cls)
 	c.mu.Lock()
-	c.nodes = cls.nodes
+	c.Nodes = cls.Nodes
 	c.mu.Unlock()
 	return &pb.Message{
 		Id:      msg.Id,
@@ -53,7 +63,7 @@ func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message 
 	var node Node
 	json.Unmarshal(msg.Payload, &node)
 	c.mu.Lock()
-	delete(c.nodes, node.ID)
+	delete(c.Nodes, node.ID)
 	c.mu.Unlock()
 	return &pb.Message{
 		Id:      msg.Id,
@@ -71,6 +81,10 @@ func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Mess
 		Method:  msg.Method,
 		Payload: payload,
 	}
+}
+
+func (c *Cluster) HandlePing() {
+
 }
 
 func (c *Cluster) RegisterHandlers(rpcServer *rpc.Server) {
