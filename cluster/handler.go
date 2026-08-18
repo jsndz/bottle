@@ -75,16 +75,23 @@ func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message 
 func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Message {
 	payload, _ := json.Marshal(c.self)
 	c.self.LastPing = time.Now()
+
+	var sender Node
+	if err := json.Unmarshal(msg.Payload, &sender); err == nil {
+		c.mu.Lock()
+		if peer, ok := c.Nodes[sender.ID]; ok {
+			peer.LastPing = time.Now()
+			peer.MissedHeartbeats = 0
+			peer.State = ACTIVE
+		}
+		c.mu.Unlock()
+	}
 	return &pb.Message{
 		Id:      msg.Id,
 		Type:    pb.FrameType_UNARY,
 		Method:  msg.Method,
 		Payload: payload,
 	}
-}
-
-func (c *Cluster) HandlePing() {
-
 }
 
 func (c *Cluster) RegisterHandlers(rpcServer *rpc.Server) {

@@ -10,13 +10,13 @@ import (
 )
 
 type Server struct {
-	Port    string
+	Addr    string
 	Handler *Handler
 }
 
 func NewServer(port string) *Server {
 	return &Server{
-		Port:    port,
+		Addr:    port,
 		Handler: NewHandler(),
 	}
 }

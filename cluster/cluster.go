@@ -48,7 +48,9 @@ func (c *Cluster) Join(addr string) error {
 
 	client := rpc.NewClient(addr, 1, c.pool)
 	payload, _ := json.Marshal(c.self)
-	resp, _ := client.Call(context.Background(), "cluster.Join", payload, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, _ := client.Call(ctx, "cluster.join", payload, nil)
 	if resp.Error != "" {
 		return errors.New("Failed to Join the Cluster " + resp.Error)
 	}
@@ -101,7 +103,9 @@ func (c *Cluster) Heartbeat() {
 
 		go func(node *Node) {
 			client := rpc.NewClient(node.Address, 1, c.pool)
-			reply, err := client.Call(context.Background(), "cluster.heartbeat", payload, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			reply, err := client.Call(ctx, "cluster.heartbeat", payload, nil)
 			if err != nil {
 				payload, _ := json.Marshal(node)
 				ch <- &pb.Message{
@@ -117,27 +121,30 @@ func (c *Cluster) Heartbeat() {
 		msg := <-ch
 		var node Node
 		json.Unmarshal(msg.Payload, &node)
-
+		c.mu.Lock()
 		if msg.Error == "No Reply" {
-			c.Nodes[node.ID].State = DEAD
-			return
+			c.Nodes[node.ID].MissedHeartbeats++
+			if c.Nodes[node.ID].MissedHeartbeats > 3 {
+				c.Nodes[node.ID].State = DEAD
+				c.Nodes[node.ID].MissedHeartbeats = 0
+			}
+			c.mu.Unlock()
+			continue
 		}
 		c.Nodes[node.ID].State = ACTIVE
 		c.Nodes[node.ID].LastPing = time.Now()
-
+		c.mu.Unlock()
 	}
-
 }
 
 func (c *Cluster) Leave(cl *rpc.Client) error {
 	payload, _ := json.Marshal(c.self)
+	c.mu.Lock()
 	c.ID = ""
-	for _, node := range c.Nodes {
-		if node.ID == c.self.ID {
-			continue
-		}
-		delete(c.Nodes, node.ID)
-	}
+	c.Nodes = map[string]*Node{c.self.ID: c.self}
+	c.self.State = DEAD
+	c.mu.Unlock()
+
 	c.BroadCast("cluster.left", nil, payload)
 	return nil
 }

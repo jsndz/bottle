@@ -19,7 +19,7 @@ type Client struct {
 	Pool     *GlobalPool
 	MaxConn  uint8
 	MaxRetry uint
-	Port     string
+	Addr     string
 }
 
 func NewClient(port string, maxConn uint8, pool *GlobalPool) *Client {
@@ -27,12 +27,12 @@ func NewClient(port string, maxConn uint8, pool *GlobalPool) *Client {
 		ID:      uuid.NewString(),
 		Pool:    pool,
 		MaxConn: maxConn,
-		Port:    port,
+		Addr:    port,
 	}
 }
 
 func (c *Client) NewConnection() *Connection {
-	conn, err := net.Dial("tcp", ":"+c.Port)
+	conn, err := net.Dial("tcp", c.Addr)
 	if err != nil {
 		return nil
 	}
@@ -47,9 +47,9 @@ func (c *Client) NewConnection() *Connection {
 }
 
 // PING
-
 func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
-	connection := c.Pool.Get(c.Port)
+	connection := c.Pool.Get(c.Addr)
+	defer c.Pool.Release(c.Addr, connection.ID)
 	conn := *connection.Conn
 	deadline, ok := ctx.Deadline()
 	if ok {
@@ -84,9 +84,12 @@ func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
 
 // Call is UNARY
 func (c *Client) Call(ctx context.Context, method string, payload []byte, headers map[string]string) (*pb.Message, error) {
-	connection := c.Pool.Get(c.Port)
+	connection := c.Pool.Get(c.Addr)
 	conn := *connection.Conn
 	deadline, ok := ctx.Deadline()
+	if headers == nil {
+		headers = make(map[string]string)
+	}
 	if ok {
 		conn.SetDeadline(deadline)
 		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
@@ -117,7 +120,7 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 		return nil, err
 	}
 	if resp.Type == pb.FrameType_UNARY {
-		c.Pool.Release(c.Port, connection.ID)
+		c.Pool.Release(c.Addr, connection.ID)
 	}
 
 	return resp, nil
@@ -125,10 +128,13 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 
 // client side it for asking data
 func (c *Client) StartStream(ctx context.Context, method string, payload []byte, headers map[string]string) (<-chan *pb.Message, error) {
-	connection := c.Pool.Get(c.Port)
+	connection := c.Pool.Get(c.Addr)
 	conn := *connection.Conn
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
+		if headers == nil {
+			headers = make(map[string]string)
+		}
 		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
 	}
 
@@ -147,7 +153,7 @@ func (c *Client) StartStream(ctx context.Context, method string, payload []byte,
 	ch := make(chan *pb.Message, 100)
 	go func() {
 		defer close(ch)
-		defer c.Pool.Release(c.Port, connection.ID)
+		defer c.Pool.Release(c.Addr, connection.ID)
 
 		for {
 			respBytes, err := readFrame(conn)
