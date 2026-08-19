@@ -1,77 +1,129 @@
-## 1. Data Model & Node States (node.go)
+# Bottle 🍼
 
-  [ ] Add SUSPECT State Enum:
-  Missing SUSPECT in NodeState (currently only has DEAD, JOINING, LEFT, ACTIVE).
-  [ ] Track Missed Heartbeats:
-  Add a MissedHeartbeats int or Failures int field on Node to support the multi-stage failure detector (ACTIVE →
-  SUSPECT → DEAD).
-  ──────
-  ### 2. Payload DTOs for Clean JSON Serialization
-  Currently, cluster.go and handler.go try to serialize the Cluster struct directly (json.Marshal(c)), which fails
-  because id and nodes are unexported private fields.
-  [ ] Create dedicated request/response DTOs (can be in cluster/dto.go or cluster/cluster.go):
-    type JoinRequest struct {
-        ClusterID string `json:"cluster_id"`
-        Node      *Node  `json:"node"`
-    }
+> **A minimal, modular Kubernetes designed from day one to run on 3–20 machines.**
 
-    type JoinResponse struct {
-        ClusterID string           `json:"cluster_id"`
-        Nodes     map[string]*Node `json:"nodes"`
-    }
+Bottle is a clean-slate, lightweight distributed orchestration engine built in Go. Rather than stripping down Kubernetes ("Kubernetes Lite"), Bottle answers a fundamental question:
 
-    type HeartbeatPayload struct {
-        ClusterID string    `json:"cluster_id"`
-        SenderID  string    `json:"sender_id"`
-        SentAt    time.Time `json:"sent_at"`
-    }
+***"What if Kubernetes had been designed to run on 3–20 machines from day one?"***
 
-  ──────
-  ### 3. Cluster Lifecycle & Logic (cluster.go)
+No heavy external dependencies like etcd or HashiCorp Raft—every layer from custom TCP/Protobuf RPC to cluster membership, Raft consensus, MVCC key-value storage, scheduling, and process execution is built from first principles.
 
-  [ ] Update NewCluster Constructor:
-  Accept clusterID string (e.g. NewCluster(clusterID string, self *Node, srv *rpc.Server)) instead of always
-  generating a random UUID.
-  [ ] Fix Join(seedAddr string):
-      1. Pre-flight ping: Check if seedAddr is alive before attempting join.
-      2. Context Timeout: Replace context.Background() with a timeout (e.g. 5s).
-      3. Fix method casing: Fix "cluster.Join" → "cluster.join".
-      4. Deserialize JoinResponse: Properly populate c.id, c.nodes, and mark c.self.State = ACTIVE.
-  [ ] Fix Heartbeat() Loop & Race Conditions:
-      1. Remove early return: Don't break the loop when one peer is unreachable; continue processing all peers.
-      2. Use sync.WaitGroup: Concurrently ping all peers in parallel.
-      3. Thread Safety: Lock c.mu.Lock() when updating c.nodes[node.ID].State and LastPing.
-      4. Context Deadline: Add a strict 1–2s timeout on peer pings.
-      5. State Progression: Transition active → suspect → dead based on missed counts.
-  [ ] Fix Leave():
-      1. Lock c.mu.Lock() before updating state.
-      2. Mark c.self.State = LEFT.
-      3. Cleanly broadcast "cluster.left" to peers.
-  [ ] Add Thread-safe Helper Methods:
-      • GetNodes() []*Node
-      • GetNode(id string) (*Node, bool)
-      • GetID() string
-      • NodeExists(id string) bool
+---
 
-  ──────
-  ### 4. RPC Handlers (handler.go)
+## 🏗 System Architecture Roadmap
 
-  [ ] Enhance HandleJoin:
-      1. Cluster ID Verification: Verify req.ClusterID == c.id.
-      2. Duplicate Check: Ensure node ID isn't already active on a conflicting address.
-      3. Reverse Ping Verification: Ping the joining node's advertised address before accepting it.
-      4. Return JoinResponse: Send the full node map back in JoinResponse.
-  [ ] Fix HandleUpdate:
-  Unmarshal JoinResponse instead of unexported Cluster struct.
-  [ ] Fix HandleHeartBeat:
-      1. Validate ClusterID.
-      2. Update the sender node's LastPing and State = ACTIVE in c.nodes (currently it updates c.self.LastPing by
-      mistake).
+```
+Linux
+  ↓
+Networking
+  ↓
+RPC (Phase 0 - Built)
+  ↓
+Cluster Membership (Phase 1 - Built)
+  ↓
+Consensus / Raft (Phase 2 - Next)
+  ↓
+Distributed KV Store (Phase 3)
+  ↓
+Watch API (Phase 4)
+  ↓
+API Server (Phase 5)
+  ↓
+Scheduler (Phase 6)
+  ↓
+Controller Runtime (Phase 7)
+  ↓
+Worker Agent (Phase 8)
+  ↓
+Networking / Service Discovery (Phase 9)
+  ↓
+pebctl CLI (Phase 10)
+  ↓
+Bottle Unified Binary (Phase 11)
+```
 
-  ──────
-  ### 5. Prerequisites in rpc (Affects Cluster)
+---
 
-  [ ] Rename Port → Addr in rpc.Client: Ensure net.Dial("tcp", c.Addr) works with host:port.
-  [ ] Add client.Ping(ctx): Low-level heartbeat frame exchange over the connection pool.
-  [ ] Fix Nil Map Panic in client.Call(): Ensure headers isn't nil before assigning headers["X-Timeout"].
-  ──────
+## ⚡ Current Progress Summary
+
+### Phase 0 — Foundation & RPC Layer (`rpc/`) ✅ Completed
+* **Framed TCP Transport**: Custom binary frame layer over raw TCP sockets (`rpc/frame.go`).
+* **Protobuf Envelope**: Universal RPC message envelope carrying `ID`, `Method`, `Headers`, and `Payload []byte` (`rpc/proto/`).
+* **Unary & Streaming RPCs**: Full support for single request-response calls and long-lived server streams (`rpc/stream.go`).
+* **Connection Pooling**: Global client connection pool (`GlobalPool`) reusing established TCP sockets across nodes (`rpc/connection.go`).
+* **Middleware Support**: Interceptor pipeline for authentication, logging, and error handling (`rpc/handler.go`).
+
+### Phase 1 — Cluster Membership (`cluster/`) ✅ Completed
+* **Node State Machine**: Manages node lifecycle states (`JOINING`, `ACTIVE`, `SUSPECT`, `DEAD`, `LEFT`).
+* **Seed Node Joining**: Seed join handshake where new nodes dynamically discover `ClusterID` and full node topology (`cluster/cluster.go`).
+* **Asynchronous Parallel Broadcasting**: Non-blocking `BroadCast` mechanism delivering topological changes to peers concurrently.
+* **Bi-directional Heartbeats & Ticker**: 5-second periodic health check loop exchanging state between peers with `context.WithTimeout(2s)`.
+* **Failure Detector**: Tracks missed heartbeats per node—automatically transitions un-responsive peers to `DEAD` after 3 consecutive missed pings.
+* **Graceful Exit**: `Leave()` protocol notifying the cluster mesh before process termination.
+
+---
+
+## 📁 Repository Structure
+
+```
+bottle/
+├── rpc/                # Phase 0: Custom TCP transport & Protobuf RPC framework
+│   ├── client.go       # RPC client & call dispatcher
+│   ├── server.go       # RPC listener & handler router
+│   ├── connection.go   # TCP connection management & pooling
+│   ├── frame.go        # Binary frame parser
+│   ├── handler.go      # Request handlers & middleware chains
+│   ├── message.go      # RPC envelope constructor helpers
+│   └── proto/          # Protobuf definitions
+├── cluster/            # Phase 1: Cluster membership & failure detection
+│   ├── node.go         # Node metadata & state machine enums
+│   ├── cluster.go      # Thread-safe cluster map, join, broadcast, & heartbeat loop
+│   └── handler.go      # RPC endpoints (cluster.join, cluster.update, cluster.heartbeat)
+├── docs/               # System architecture & design specifications
+│   ├── architecture.md # Overall system architecture blueprint
+│   ├── cluster.md      # Detailed cluster membership specification
+│   └── rpc.md          # RPC module specification
+├── main.go             # Single binary entrypoint
+├── go.mod
+└── README.md
+```
+
+---
+
+## 🚀 Quickstart Example
+
+### Initializing a Cluster Node
+
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/jsndz/bottle/cluster"
+	"github.com/jsndz/bottle/rpc"
+)
+
+func main() {
+	// 1. Create local node identity
+	self := cluster.NewNode("192.168.1.10:8000")
+
+	// 2. Initialize RPC Server
+	srv := rpc.NewServer("192.168.1.10:8000")
+
+	// 3. Initialize Cluster state
+	cls := cluster.NewCluster(self, srv, "bottle-cluster-01")
+
+	// 4. Start background failure detector
+	cls.HeartbeatTicker()
+
+	fmt.Println("Bottle cluster node initialized:", cls.ID)
+}
+```
+
+---
+
+## 📚 Documentation
+For deep-dive architectural specifications, inspect the documents in `docs/`:
+* 📘 [Overall System Architecture](docs/architecture.md)
+* 📗 [Cluster Membership Architecture](docs/cluster.md)
+* 📙 [RPC Layer Architecture](docs/rpc.md)
