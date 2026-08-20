@@ -547,3 +547,13 @@ State
 ```
 
 Once that chain is clear, Raft has somewhere concrete to fit into the architecture.
+
+Lets start with FSM
+
+In broader perspective consider each fsm as a node means each will be running its own process
+So the node should have a place to store the commands that are given by the Leader 
+the commands are stored in KV so it makes sense that each node must have KV
+
+After KV is implemented we can add commands to them 
+
+http://thesecretlivesofdata.com/raft/
