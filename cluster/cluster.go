@@ -15,18 +15,18 @@ type Cluster struct {
 	ID    string
 	mu    sync.RWMutex
 	Nodes map[string]*Node
-	self  *Node
+	Self  *Node
 	pool  *rpc.GlobalPool
 }
 
-func NewCluster(self *Node, srv *rpc.Server, id string) *Cluster {
+func NewCluster(Self *Node, srv *rpc.Server, id string) *Cluster {
 	Nodes := make(map[string]*Node)
-	Nodes[self.ID] = self
+	Nodes[Self.ID] = Self
 	pool := rpc.NewGlobalPool()
 	cls := &Cluster{
 		ID:    id,
 		Nodes: Nodes,
-		self:  self,
+		Self:  Self,
 		pool:  pool,
 	}
 	cls.RegisterHandlers(srv)
@@ -47,7 +47,7 @@ func (c *Cluster) HeartbeatTicker() {
 func (c *Cluster) Join(addr string) error {
 
 	client := rpc.NewClient(addr, 1, c.pool)
-	payload, _ := json.Marshal(c.self)
+	payload, _ := json.Marshal(c.Self)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	resp, _ := client.Call(ctx, "cluster.join", payload, nil)
@@ -61,7 +61,7 @@ func (c *Cluster) Join(addr string) error {
 	c.mu.Lock()
 	c.Nodes = cls.Nodes
 	c.ID = cls.ID
-	c.self.State = ACTIVE
+	c.Self.State = ACTIVE
 	c.mu.Unlock()
 
 	return nil
@@ -72,7 +72,7 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 	defer c.mu.RUnlock()
 
 	for _, node := range c.Nodes {
-		if node.ID == c.self.ID {
+		if node.ID == c.Self.ID {
 			continue
 		}
 		go func(addr string) {
@@ -84,11 +84,11 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 }
 
 func (c *Cluster) Heartbeat() {
-	payload, _ := json.Marshal(c.self)
+	payload, _ := json.Marshal(c.Self)
 	c.mu.RLock()
 	peers := make([]*Node, 0, len(c.Nodes))
 	for _, node := range c.Nodes {
-		if node.ID != c.self.ID {
+		if node.ID != c.Self.ID {
 			peers = append(peers, node)
 		}
 	}
@@ -138,11 +138,11 @@ func (c *Cluster) Heartbeat() {
 }
 
 func (c *Cluster) Leave(cl *rpc.Client) error {
-	payload, _ := json.Marshal(c.self)
+	payload, _ := json.Marshal(c.Self)
 	c.mu.Lock()
 	c.ID = ""
-	c.Nodes = map[string]*Node{c.self.ID: c.self}
-	c.self.State = DEAD
+	c.Nodes = map[string]*Node{c.Self.ID: c.Self}
+	c.Self.State = DEAD
 	c.mu.Unlock()
 
 	c.BroadCast("cluster.left", nil, payload)

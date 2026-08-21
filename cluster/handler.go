@@ -73,8 +73,8 @@ func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message 
 	}
 }
 func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Message {
-	payload, _ := json.Marshal(c.self)
-	c.self.LastPing = time.Now()
+	payload, _ := json.Marshal(c.Self)
+	c.Self.LastPing = time.Now()
 
 	var sender Node
 	if err := json.Unmarshal(msg.Payload, &sender); err == nil {
