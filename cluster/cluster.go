@@ -148,3 +148,41 @@ func (c *Cluster) Leave(cl *rpc.Client) error {
 	c.BroadCast("cluster.left", nil, payload)
 	return nil
 }
+
+func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string, payload []byte) (chan *RPCResult, int) {
+	c.mu.RLock()
+	peers := make([]*Node, 0, len(c.Nodes))
+	for _, node := range c.Nodes {
+		if node.ID != c.Self.ID {
+			peers = append(peers, node)
+		}
+	}
+	c.mu.RUnlock()
+
+	if len(peers) == 0 {
+		return nil, 0
+	}
+	ch := make(chan *RPCResult, len(peers))
+
+	for _, node := range peers {
+		go func(node *Node) {
+			client := rpc.NewClient(node.Address, 1, c.pool)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			reply, err := client.Call(ctx, method, payload, nil)
+			if err != nil {
+				ch <- &RPCResult{
+					NodeId:   node.ID,
+					Response: nil,
+					Err:      err,
+				}
+			}
+			ch <- &RPCResult{
+				NodeId:   node.ID,
+				Response: reply,
+				Err:      nil,
+			}
+		}(node)
+	}
+	return ch, len(peers)
+}

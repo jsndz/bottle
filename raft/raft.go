@@ -2,6 +2,7 @@ package raft
 
 import (
 	"encoding/json"
+
 	"sync"
 	"time"
 
@@ -61,6 +62,8 @@ func (r *Raft) StartElection() error {
 		}
 	}
 	r.mu.Unlock()
+
+	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.election", nil, payload)
 
 	return nil
 }
