@@ -64,6 +64,25 @@ func (r *Raft) StartElection() error {
 	r.mu.Unlock()
 
 	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.election", nil, payload)
+	votes := 0
+	majority := ((numPeers + 1) / 2) + 1
+	for i := 0; i < numPeers; i++ {
 
+		data := <-ch
+
+		if data.Error != "" {
+			continue
+		}
+		var reply VoteResponse
+		json.Unmarshal(data.Payload, &reply)
+		if reply.Granted {
+			votes++
+			if votes >= majority {
+				r.Role = Leader
+				break
+			}
+		}
+
+	}
 	return nil
 }

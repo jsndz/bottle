@@ -149,7 +149,7 @@ func (c *Cluster) Leave(cl *rpc.Client) error {
 	return nil
 }
 
-func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string, payload []byte) (chan *RPCResult, int) {
+func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string, payload []byte) (chan *pb.Message, int) {
 	c.mu.RLock()
 	peers := make([]*Node, 0, len(c.Nodes))
 	for _, node := range c.Nodes {
@@ -162,7 +162,7 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 	if len(peers) == 0 {
 		return nil, 0
 	}
-	ch := make(chan *RPCResult, len(peers))
+	ch := make(chan *pb.Message, len(peers))
 
 	for _, node := range peers {
 		go func(node *Node) {
@@ -171,17 +171,14 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 			defer cancel()
 			reply, err := client.Call(ctx, method, payload, nil)
 			if err != nil {
-				ch <- &RPCResult{
-					NodeId:   node.ID,
-					Response: nil,
-					Err:      err,
+				ch <- &pb.Message{
+					Method:  method,
+					Payload: nil,
+					Error:   err.Error(),
 				}
+				return
 			}
-			ch <- &RPCResult{
-				NodeId:   node.ID,
-				Response: reply,
-				Err:      nil,
-			}
+			ch <- reply
 		}(node)
 	}
 	return ch, len(peers)
