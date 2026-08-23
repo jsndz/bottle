@@ -99,5 +99,4 @@ func (c *Cluster) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("cluster.update", c.HandleUpdate, nil)
 	rpcServer.Handler.AddHandler("cluster.left", c.HandleLeave, nil)
 	rpcServer.Handler.AddHandler("cluster.heartbeat", c.HandleHeartBeat, nil)
-
 }

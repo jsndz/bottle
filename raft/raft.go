@@ -42,29 +42,20 @@ func (r *Raft) AppendLog(log Log) {
 
 func (r *Raft) StartElection() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.Term++
 	r.Role = Candidate
+	r.mu.Unlock()
 	req := VoteRequest{
-		Term:     r.Term,
-		LogIndex: len(r.Logs),
+		Term:        r.Term,
+		LogIndex:    len(r.Logs),
+		CandidateId: r.Cluster.Self.ID,
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	//broadcast to all nodes
-	r.mu.Lock()
-	peers := make([]*cluster.Node, 0, len(r.Cluster.Nodes))
-	for _, node := range r.Cluster.Nodes {
-		if node.ID != r.Cluster.Self.ID {
-			peers = append(peers, node)
-		}
-	}
-	r.mu.Unlock()
-
 	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.election", nil, payload)
-	votes := 0
+	votes := 1
 	majority := ((numPeers + 1) / 2) + 1
 	for i := 0; i < numPeers; i++ {
 
