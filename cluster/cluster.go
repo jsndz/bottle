@@ -16,18 +16,18 @@ type Cluster struct {
 	mu    sync.RWMutex
 	Nodes map[string]*Node
 	Self  *Node
-	pool  *rpc.GlobalPool
+	Pool  *rpc.GlobalPool
 }
 
 func NewCluster(Self *Node, srv *rpc.Server, id string) *Cluster {
 	Nodes := make(map[string]*Node)
 	Nodes[Self.ID] = Self
-	pool := rpc.NewGlobalPool()
+	Pool := rpc.NewGlobalPool()
 	cls := &Cluster{
 		ID:    id,
 		Nodes: Nodes,
 		Self:  Self,
-		pool:  pool,
+		Pool:  Pool,
 	}
 	cls.RegisterHandlers(srv)
 	return cls
@@ -46,7 +46,7 @@ func (c *Cluster) HeartbeatTicker() {
 // node as a joining node
 func (c *Cluster) Join(addr string) error {
 
-	client := rpc.NewClient(addr, 1, c.pool)
+	client := rpc.NewClient(addr, 1, c.Pool)
 	payload, _ := json.Marshal(c.Self)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -76,7 +76,7 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 			continue
 		}
 		go func(addr string) {
-			client := rpc.NewClient(addr, 1, c.pool)
+			client := rpc.NewClient(addr, 1, c.Pool)
 			client.Call(context.Background(), method, payload, headers)
 		}(node.Address)
 	}
@@ -102,7 +102,7 @@ func (c *Cluster) Heartbeat() {
 	for _, node := range peers {
 
 		go func(node *Node) {
-			client := rpc.NewClient(node.Address, 1, c.pool)
+			client := rpc.NewClient(node.Address, 1, c.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			reply, err := client.Call(ctx, "cluster.heartbeat", payload, nil)
@@ -166,7 +166,7 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 
 	for _, node := range peers {
 		go func(node *Node) {
-			client := rpc.NewClient(node.Address, 1, c.pool)
+			client := rpc.NewClient(node.Address, 1, c.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			reply, err := client.Call(ctx, method, payload, nil)

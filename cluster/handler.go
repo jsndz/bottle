@@ -20,7 +20,7 @@ func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 			Error:  "Invalid Payload",
 		}
 	}
-	client := rpc.NewClient(joiningNode.Address, 1, c.pool)
+	client := rpc.NewClient(joiningNode.Address, 1, c.Pool)
 	_, err := client.Ping(ctx)
 	if err != nil {
 		return &pb.Message{

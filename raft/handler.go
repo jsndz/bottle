@@ -37,6 +37,30 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 	}
 }
 
+func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Message {
+	leader := r.Cluster.Nodes[r.LeaderID]
+	client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
+	if r.LeaderID != r.Cluster.Self.ID {
+		reply, err := client.Call(context.Background(), msg.Method, msg.Payload, msg.Headers)
+		if err != nil {
+			return &pb.Message{
+				Error: err.Error(),
+			}
+		}
+		return reply
+	}
+	// add the log to the raft logs
+	r.Logs = append(r.Logs, Log{
+		Term:    r.Term,
+		Command: string(msg.Payload),
+	})
+	// broadcast the log to all the nodes in the cluster
+
+	// if quorum is reached, commit the log and return success
+	return nil
+}
+
 func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("raft.election", r.HandleElection, nil)
+	rpcServer.Handler.AddHandler("raft.client.command", r.HandleClientCommand, nil)
 }

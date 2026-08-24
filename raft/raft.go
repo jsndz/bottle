@@ -18,12 +18,13 @@ const (
 )
 
 type Raft struct {
-	mu      sync.Mutex
-	Role    Role
-	Cluster *cluster.Cluster
-	Timeout time.Duration
-	Term    int
-	Logs    []Log
+	mu       sync.Mutex
+	Role     Role
+	Cluster  *cluster.Cluster
+	Timeout  time.Duration
+	Term     int
+	Logs     []Log
+	LeaderID string
 }
 
 func NewRaft(cluster *cluster.Cluster) *Raft {
