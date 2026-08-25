@@ -1,5 +1,7 @@
 package kv
 
+import "encoding/json"
+
 type Command struct {
 	Key   string
 	Value string
@@ -7,19 +9,20 @@ type Command struct {
 }
 
 type KVStore struct {
-	commands map[string]Command
+	commands []Command
 }
 
 func NewKVStore() *KVStore {
 	return &KVStore{
-		commands: make(map[string]Command),
+		commands: make([]Command, 0),
 	}
 }
 
-func (kv *KVStore) Add(cmd Command, id string) {
-	kv.commands[id] = cmd
-}
-
-func (kv *KVStore) Delete(id string) {
-	delete(kv.commands, id)
+func (kv *KVStore) Apply(data []byte) any {
+	var cmd Command
+	if err := json.Unmarshal(data, &cmd); err != nil {
+		return err
+	}
+	kv.commands = append(kv.commands, cmd)
+	return nil
 }

@@ -38,7 +38,12 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 }
 
 func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	leader := r.Cluster.Nodes[r.LeaderID]
+	if r.LeaderID == "" {
+		return &pb.Message{Id: msg.Id, Error: "no leader currently elected"}
+	}
 	client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
 	if r.LeaderID != r.Cluster.Self.ID {
 		reply, err := client.Call(context.Background(), msg.Method, msg.Payload, msg.Headers)
@@ -49,11 +54,18 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		}
 		return reply
 	}
-	prevLog := r.Logs[len(r.Logs)]
+
+	var prevLogIndex, prevLogTerm int
+	if len(r.Logs) > 0 {
+		prevLog := r.Logs[len(r.Logs)-1]
+		prevLogIndex = prevLog.Index
+		prevLogTerm = prevLog.Term
+	}
+
 	log := Log{
 		Term:    r.Term,
-		Command: string(msg.Payload),
-		Index:   prevLog.Index + 1,
+		Command: (msg.Payload),
+		Index:   prevLogIndex + 1,
 	}
 	// add the log to the raft logs
 	r.Logs = append(r.Logs, log)
@@ -62,8 +74,8 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		Term:              r.Term,
 		LeaderID:          r.LeaderID,
 		Logs:              log,
-		PrevLogIndex:      prevLog.Index,
-		PrevLogTerm:       prevLog.Term,
+		PrevLogIndex:      prevLogIndex,
+		PrevLogTerm:       prevLogTerm,
 		LeaderCommitIndex: r.CommitIndex,
 	}
 	payload, err := json.Marshal(appendEntry)
@@ -92,9 +104,15 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 			break
 		}
 	}
-
+	if numberOfAppends < majority {
+		return &pb.Message{
+			Id:    msg.Id,
+			Error: "failed to reach quorum consensus",
+		}
+	}
 	// if quorum is reached, commit the log and return success
 	r.CommitIndex = log.Index
+	r.FSM.Apply(log.Command)
 	return &pb.Message{
 		Method: "raft.appended",
 		Type:   pb.FrameType_UNARY,

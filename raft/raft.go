@@ -9,14 +9,6 @@ import (
 	"github.com/jsndz/bottle/cluster"
 )
 
-type Role string
-
-const (
-	Leader    Role = "leader"
-	Follower  Role = "follower"
-	Candidate Role = "candidate"
-)
-
 type Raft struct {
 	mu          sync.Mutex
 	Role        Role
@@ -26,6 +18,7 @@ type Raft struct {
 	Logs        []Log
 	LeaderID    string
 	CommitIndex int
+	FSM         FSM
 }
 
 func NewRaft(cluster *cluster.Cluster) *Raft {
