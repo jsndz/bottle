@@ -49,15 +49,56 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		}
 		return reply
 	}
-	// add the log to the raft logs
-	r.Logs = append(r.Logs, Log{
+	prevLog := r.Logs[len(r.Logs)]
+	log := Log{
 		Term:    r.Term,
 		Command: string(msg.Payload),
-	})
+		Index:   prevLog.Index + 1,
+	}
+	// add the log to the raft logs
+	r.Logs = append(r.Logs, log)
 	// broadcast the log to all the nodes in the cluster
+	appendEntry := &AppendEntriesReq{
+		Term:              r.Term,
+		LeaderID:          r.LeaderID,
+		Logs:              log,
+		PrevLogIndex:      prevLog.Index,
+		PrevLogTerm:       prevLog.Term,
+		LeaderCommitIndex: r.CommitIndex,
+	}
+	payload, err := json.Marshal(appendEntry)
+	if err != nil {
+		return &pb.Message{
+			Error: err.Error(),
+		}
+	}
+	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.append", nil, payload)
+	numberOfAppends := 1
+	majority := ((numPeers + 1) / 2) + 1
+
+	for i := 0; i < numPeers; i++ {
+		data := <-ch
+		if data.Error != "" {
+			continue
+		}
+		var res AppendEntriesRes
+		if err := json.Unmarshal(data.Payload, &res); err != nil {
+			continue
+		}
+		if res.Success {
+			numberOfAppends++
+		}
+		if numberOfAppends >= majority {
+			break
+		}
+	}
 
 	// if quorum is reached, commit the log and return success
-	return nil
+	r.CommitIndex = log.Index
+	return &pb.Message{
+		Method: "raft.appended",
+		Type:   pb.FrameType_UNARY,
+	}
 }
 
 func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
