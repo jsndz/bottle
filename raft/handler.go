@@ -40,12 +40,13 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Message {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	leader := r.Cluster.Nodes[r.LeaderID]
-	if r.LeaderID == "" {
-		return &pb.Message{Id: msg.Id, Error: "no leader currently elected"}
-	}
-	client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
+
 	if r.LeaderID != r.Cluster.Self.ID {
+		leader := r.Cluster.Nodes[r.LeaderID]
+		if r.LeaderID == "" {
+			return &pb.Message{Id: msg.Id, Error: "no leader currently elected"}
+		}
+		client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
 		reply, err := client.Call(context.Background(), msg.Method, msg.Payload, msg.Headers)
 		if err != nil {
 			return &pb.Message{
@@ -119,7 +120,51 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	}
 }
 
+func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
+	// assuming reciever is follower
+	// check term if greater then add to log
+	//apply to FSM on heartbeat
+
+	var req AppendEntriesReq
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		return &pb.Message{
+			Error: err.Error(),
+		}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var prevLogIndex, prevLogTerm int
+	var res AppendEntriesRes
+
+	if len(r.Logs) > 0 {
+		prevLog := r.Logs[len(r.Logs)-1]
+		prevLogIndex = prevLog.Index
+		prevLogTerm = prevLog.Term
+	}
+
+	if req.Term < r.Term || req.PrevLogTerm < prevLogTerm || req.PrevLogIndex < prevLogIndex {
+		res.Success = false
+		res.Term = r.Term
+		payload, _ := json.Marshal(res)
+
+		return &pb.Message{
+			Payload: payload,
+			Method:  msg.Method,
+		}
+	}
+	r.Logs = append(r.Logs, req.Logs)
+	res.Success = true
+	res.Term = r.Term
+	payload, _ := json.Marshal(res)
+	return &pb.Message{
+		Method:  msg.Method,
+		Payload: payload,
+	}
+}
+
 func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("raft.election", r.HandleElection, nil)
 	rpcServer.Handler.AddHandler("raft.client.command", r.HandleClientCommand, nil)
+	rpcServer.Handler.AddHandler("raft.append", r.HandleAppend, nil)
 }
