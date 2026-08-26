@@ -143,7 +143,7 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 		prevLogTerm = prevLog.Term
 	}
 
-	if req.Term < r.Term || req.PrevLogTerm < prevLogTerm || req.PrevLogIndex < prevLogIndex {
+	if req.Term < r.Term {
 		res.Success = false
 		res.Term = r.Term
 		payload, _ := json.Marshal(res)
@@ -153,7 +153,29 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 			Method:  msg.Method,
 		}
 	}
-	r.Logs = append(r.Logs, req.Logs)
+	if req.PrevLogIndex > prevLogIndex || req.PrevLogTerm != prevLogTerm {
+		// if leader is greater then fine since follower can get the data
+		res.Success = false
+		res.Term = r.Term
+		payload, _ := json.Marshal(res)
+		// leader should jump back one by one and finds the match
+		return &pb.Message{
+			Payload: payload,
+			Method:  msg.Method,
+		}
+	}
+	if req.PrevLogIndex != prevLogIndex {
+		r.Logs = r.Logs[:req.PrevLogIndex]
+		r.Logs[req.PrevLogIndex+1] = req.Logs
+
+	} else {
+		r.Logs = append(r.Logs, req.Logs)
+	}
+	if req.Term > r.Term {
+		r.Term = req.Term
+		r.Role = Follower
+	}
+	r.LeaderID = req.LeaderID
 	res.Success = true
 	res.Term = r.Term
 	payload, _ := json.Marshal(res)
