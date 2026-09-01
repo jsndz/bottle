@@ -41,9 +41,10 @@ func (r *Raft) StartElection() error {
 	r.Role = Candidate
 	r.mu.Unlock()
 	req := VoteRequest{
-		Term:        r.Term,
-		LogIndex:    len(r.Logs),
-		CandidateId: r.Cluster.Self.ID,
+		Term:         r.Term,
+		LastLogIndex: len(r.Logs),
+		LastLogTerm:  r.Logs[len(r.Logs)-1].Term,
+		CandidateId:  r.Cluster.Self.ID,
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {

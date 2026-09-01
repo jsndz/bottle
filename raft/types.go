@@ -15,9 +15,10 @@ type Log struct {
 }
 
 type VoteRequest struct {
-	Term        int    `json:"term"`
-	LogIndex    int    `json:"log_index"`
-	CandidateId string `json:"candidate_id"`
+	Term         int    `json:"term"`
+	LastLogTerm  int    `json:"last_log_term"`
+	LastLogIndex int    `json:"last_log_index"`
+	CandidateId  string `json:"candidate_id"`
 }
 
 type VoteResponse struct {

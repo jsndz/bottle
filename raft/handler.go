@@ -20,12 +20,22 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 	if r.Term > req.Term {
 		res.Granted = false
 		res.Term = r.Term
-	} else {
-		res.Granted = true
-		r.mu.Lock()
-		r.Term = req.Term
-		r.mu.Unlock()
-		res.Term = req.Term
+
+	} else if r.Term == req.Term {
+		res.Term = r.Term
+
+		if len(r.Logs) > 0 {
+			lastLog := r.Logs[len(r.Logs)-1]
+
+			if lastLog.Term > req.LastLogTerm ||
+				(lastLog.Term == req.LastLogTerm && lastLog.Index > req.LastLogIndex) {
+				res.Granted = false
+			} else {
+				res.Granted = true
+			}
+		} else {
+			res.Granted = true
+		}
 	}
 
 	payload, err := json.Marshal(res)
