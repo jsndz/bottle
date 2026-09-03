@@ -37,7 +37,11 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 			res.Granted = true
 		}
 	}
-
+	if res.Granted == true {
+		r.Term = req.Term
+		r.Role = Follower
+		r.LeaderID = req.CandidateId
+	}
 	payload, err := json.Marshal(res)
 	return &pb.Message{
 		Id:      msg.Id,
@@ -195,8 +199,37 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 	}
 }
 
+func (r *Raft) HandleHeartbeat(ctx context.Context, msg *pb.Message) *pb.Message {
+	var req AppendEntriesReq
+	err := json.Unmarshal(msg.Payload, &req)
+	if err != nil {
+		return &pb.Message{
+			Error: err.Error(),
+		}
+	}
+	var res AppendEntriesRes
+	if req.Term < r.Term {
+		res.Success = false
+		res.Term = r.Term
+	} else {
+		res.Success = true
+		res.Term = req.Term
+		r.mu.Lock()
+		r.Term = req.Term
+		r.Ticker.Reset(r.Timeout)
+		r.mu.Unlock()
+	}
+
+	payload, _ := json.Marshal(res)
+	return &pb.Message{
+		Method:  msg.Method,
+		Payload: payload,
+	}
+}
+
 func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("raft.election", r.HandleElection, nil)
 	rpcServer.Handler.AddHandler("raft.client.command", r.HandleClientCommand, nil)
 	rpcServer.Handler.AddHandler("raft.append", r.HandleAppend, nil)
+	rpcServer.Handler.AddHandler("raft.heartbeat", r.HandleHeartbeat, nil)
 }
