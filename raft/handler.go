@@ -208,7 +208,8 @@ func (r *Raft) HandleHeartbeat(ctx context.Context, msg *pb.Message) *pb.Message
 		}
 	}
 	var res AppendEntriesRes
-	if req.Term < r.Term {
+	lastLogTerm, lastLogIndex := r.GetPrevLog()
+	if req.Term < r.Term || lastLogTerm > req.PrevLogTerm || lastLogIndex > req.PrevLogIndex {
 		res.Success = false
 		res.Term = r.Term
 	} else {
@@ -219,6 +220,7 @@ func (r *Raft) HandleHeartbeat(ctx context.Context, msg *pb.Message) *pb.Message
 		r.Ticker.Reset(r.Timeout)
 		r.mu.Unlock()
 	}
+	//handle log mismatch
 
 	payload, _ := json.Marshal(res)
 	return &pb.Message{

@@ -112,13 +112,21 @@ func (r *Raft) Heartbeat() error {
 	for i := 0; i < numPeers; i++ {
 
 		data := <-ch
-
 		if data.Error != "" {
 			continue
 		}
 		var reply AppendEntriesRes
 		json.Unmarshal(data.Payload, &reply)
-
+		if reply.Term > r.Term {
+			r.Term = reply.Term
+			r.Role = Follower
+			r.Ticker.Reset(r.Timeout)
+			return nil
+		} else {
+			// handling job mismatch
+			//FIND THE peer who has log mismatch
+			// send him th req again with the index--
+		}
 	}
 	return nil
 }
