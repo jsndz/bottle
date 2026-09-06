@@ -16,31 +16,39 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 			Error: "Invalid Data",
 		}
 	}
+
 	var res VoteResponse
 	if r.Term > req.Term {
 		res.Granted = false
 		res.Term = r.Term
 
-	} else if r.Term == req.Term {
-		res.Term = r.Term
+	} else {
 
+		if req.Term > r.Term {
+			r.Term = req.Term
+			r.VotedFor = ""
+		}
+		res.Term = r.Term
 		if len(r.Logs) > 0 {
 			lastLog := r.Logs[len(r.Logs)-1]
 
 			if lastLog.Term > req.LastLogTerm ||
-				(lastLog.Term == req.LastLogTerm && lastLog.Index > req.LastLogIndex) {
+				(lastLog.Term == req.LastLogTerm && lastLog.Index > req.LastLogIndex) || r.VotedFor != "" && r.VotedFor != req.CandidateId {
 				res.Granted = false
 			} else {
 				res.Granted = true
 			}
 		} else {
-			res.Granted = true
+			if r.VotedFor != "" && r.VotedFor != req.CandidateId {
+				res.Granted = false
+			} else {
+				res.Granted = true
+			}
 		}
 	}
 	if res.Granted == true {
-		r.Term = req.Term
 		r.Role = Follower
-		r.LeaderID = req.CandidateId
+		r.VotedFor = req.CandidateId
 	}
 	payload, err := json.Marshal(res)
 	return &pb.Message{

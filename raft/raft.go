@@ -19,6 +19,7 @@ type Raft struct {
 	Logs        []Log
 	LeaderID    string
 	CommitIndex int
+	VotedFor    string
 	FSM         FSM
 }
 
@@ -41,7 +42,12 @@ func (r *Raft) AppendLog(log Log) {
 func (r *Raft) HeartbeatTicker() {
 	go func() {
 		for range r.Ticker.C {
-			r.Heartbeat()
+			if r.Role == Leader {
+				r.Heartbeat()
+			} else {
+				r.StartElection()
+			}
+
 		}
 	}()
 }
@@ -58,6 +64,7 @@ func (r *Raft) StartElection() error {
 	r.mu.Lock()
 	r.Term++
 	r.Role = Candidate
+	r.VotedFor = r.Cluster.Self.ID
 	r.mu.Unlock()
 	req := VoteRequest{
 		Term:         r.Term,
@@ -123,9 +130,10 @@ func (r *Raft) Heartbeat() error {
 		}
 
 		if !reply.Success {
-			// handling job mismatch
+			// handling log mismatch
 			//FIND THE peer who has log mismatch
-			// r.Cluster.SendToNode(reply.FollowerID, "raft.heartbeat",)
+			req.PrevLogIndex--
+			// r.Cluster.SendToNode(reply.FollowerID, "raft.heartbeat")
 			// send him th req again with the index--
 		}
 	}
