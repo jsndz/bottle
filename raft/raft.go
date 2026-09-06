@@ -41,10 +41,9 @@ func (r *Raft) AppendLog(log Log) {
 func (r *Raft) HeartbeatTicker() {
 	go func() {
 		for range r.Ticker.C {
-			r.StartElection()
+			r.Heartbeat()
 		}
 	}()
-
 }
 
 func (r *Raft) GetPrevLog() (int, int) {
@@ -52,7 +51,6 @@ func (r *Raft) GetPrevLog() (int, int) {
 		prevLog := r.Logs[len(r.Logs)-1]
 		return prevLog.Term, prevLog.Index
 	}
-
 	return 0, 0
 }
 
@@ -122,9 +120,12 @@ func (r *Raft) Heartbeat() error {
 			r.Role = Follower
 			r.Ticker.Reset(r.Timeout)
 			return nil
-		} else {
+		}
+
+		if !reply.Success {
 			// handling job mismatch
 			//FIND THE peer who has log mismatch
+			// r.Cluster.SendToNode(reply.FollowerID, "raft.heartbeat",)
 			// send him th req again with the index--
 		}
 	}

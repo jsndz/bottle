@@ -183,3 +183,17 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 	}
 	return ch, len(peers)
 }
+
+func (c *Cluster) SendToNode(nodeId string, method string, payload []byte, headers map[string]string) *pb.Message {
+	node := c.Nodes[nodeId]
+	client := rpc.NewClient(node.Address, 1, c.Pool)
+	res, err := client.Call(context.Background(), method, payload, headers)
+	if err != nil {
+		return &pb.Message{
+			Method:  method,
+			Payload: nil,
+			Error:   err.Error(),
+		}
+	}
+	return res
+}

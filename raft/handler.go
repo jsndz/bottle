@@ -109,6 +109,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 			continue
 		}
 		var res AppendEntriesRes
+		res.FollowerID = r.Cluster.Self.ID
 		if err := json.Unmarshal(data.Payload, &res); err != nil {
 			continue
 		}
@@ -150,7 +151,7 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 	defer r.mu.Unlock()
 	var prevLogIndex, prevLogTerm int
 	var res AppendEntriesRes
-
+	res.FollowerID = r.Cluster.Self.ID
 	if len(r.Logs) > 0 {
 		prevLog := r.Logs[len(r.Logs)-1]
 		prevLogIndex = prevLog.Index
@@ -208,6 +209,7 @@ func (r *Raft) HandleHeartbeat(ctx context.Context, msg *pb.Message) *pb.Message
 		}
 	}
 	var res AppendEntriesRes
+	res.FollowerID = r.Cluster.Self.ID
 	lastLogTerm, lastLogIndex := r.GetPrevLog()
 	if req.Term < r.Term || lastLogTerm > req.PrevLogTerm || lastLogIndex > req.PrevLogIndex {
 		res.Success = false

@@ -36,6 +36,7 @@ type AppendEntriesReq struct {
 }
 
 type AppendEntriesRes struct {
-	Term    int  `json:"term"`
-	Success bool `json:"success"`
+	Term       int    `json:"term"`
+	Success    bool   `json:"success"`
+	FollowerID string `json:"follower_id"`
 }
