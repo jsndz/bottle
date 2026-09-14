@@ -1,37 +1,47 @@
 package raft
 
 import (
+	"context"
 	"encoding/json"
 
 	"sync"
 	"time"
 
 	"github.com/jsndz/bottle/cluster"
+	"github.com/jsndz/bottle/rpc"
 )
 
 type Raft struct {
-	mu          sync.Mutex
-	Role        Role
-	Cluster     *cluster.Cluster
-	Ticker      time.Ticker
-	Timeout     time.Duration
+	mu sync.Mutex
+
 	Term        int
-	Logs        []Log
-	LeaderID    string
-	CommitIndex int
 	VotedFor    string
-	FSM         FSM
+	Logs        []Log
+	CommitIndex int
+
+	Role          Role
+	CurrentLeader string
+	VoteReceived  []string
+	SentLength    map[string]int
+	AckLength     map[string]int
+
+	Cluster *cluster.Cluster
+	Ticker  time.Ticker
+	Timeout time.Duration
+	FSM     FSM
 }
 
 func NewRaft(cluster *cluster.Cluster) *Raft {
 	timeout := RandomElectionTimeout()
 	return &Raft{
-		Cluster: cluster,
-		Role:    Follower,
-		Timeout: timeout,
-		Ticker:  *time.NewTicker(timeout),
-		Logs:    make([]Log, 0),
-		Term:    0,
+		Cluster:    cluster,
+		Role:       Follower,
+		Timeout:    timeout,
+		Ticker:     *time.NewTicker(timeout),
+		Logs:       make([]Log, 0),
+		Term:       0,
+		SentLength: make(map[string]int),
+		AckLength:  make(map[string]int),
 	}
 }
 
@@ -65,39 +75,103 @@ func (r *Raft) StartElection() error {
 	r.Term++
 	r.Role = Candidate
 	r.VotedFor = r.Cluster.Self.ID
-	r.mu.Unlock()
+	r.VoteReceived = []string{r.VotedFor}
+	currentTerm := r.Term
+
+	peers := make([]*cluster.Node, 0)
+	for _, node := range r.Cluster.Nodes {
+		if node.ID != r.Cluster.Self.ID {
+			peers = append(peers, node)
+		}
+	}
+
+	totalNodes := len(peers) + 1
+	majority := (totalNodes / 2) + 1
+
+	// Single-node cluster case
+	if len(r.VoteReceived) >= majority {
+		r.Role = Leader
+		r.CurrentLeader = r.Cluster.Self.ID
+		r.mu.Unlock()
+		for _, peer := range peers {
+			r.SentLength[peer.ID] = len(r.Logs)
+			r.AckLength[peer.ID] = 0
+			go ReplicateLog(r.Cluster.Self.ID, peer.ID)
+		}
+		return nil
+	}
+
+	lastLogTerm := 0
+	if len(r.Logs) > 0 {
+		lastLogTerm = r.Logs[len(r.Logs)-1].Term
+	}
+
 	req := VoteRequest{
-		Term:         r.Term,
+		Term:         currentTerm,
 		LastLogIndex: len(r.Logs),
-		LastLogTerm:  r.Logs[len(r.Logs)-1].Term,
+		LastLogTerm:  lastLogTerm,
 		CandidateId:  r.Cluster.Self.ID,
 	}
+
 	payload, err := json.Marshal(req)
 	if err != nil {
+		r.mu.Unlock()
 		return err
 	}
-	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.election", nil, payload)
-	votes := 1
-	majority := ((numPeers + 1) / 2) + 1
-	for i := 0; i < numPeers; i++ {
+	r.mu.Unlock()
 
-		data := <-ch
+	for _, peer := range peers {
+		go func(node *cluster.Node) {
+			client := rpc.NewClient(node.Address, 1, r.Cluster.Pool)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
 
-		if data.Error != "" {
-			continue
-		}
-		var reply VoteResponse
-		json.Unmarshal(data.Payload, &reply)
-		if reply.Granted {
-			votes++
-			if votes >= majority {
-				r.Role = Leader
-				r.LeaderID = r.Cluster.Self.ID
-				break
+			reply, err := client.Call(ctx, "raft.election", payload, nil)
+			if err != nil || reply.Error != "" {
+				return
 			}
-		}
 
+			var res VoteResponse
+			if err := json.Unmarshal(reply.Payload, &res); err != nil {
+				return
+			}
+
+			r.mu.Lock()
+			defer r.mu.Unlock()
+
+			// Ignore if state changed or term moved forward
+			if r.Role != Candidate || r.Term != currentTerm {
+				return
+			}
+
+			// Step down if peer has higher term
+			if res.Term > r.Term {
+				r.Term = res.Term
+				r.VoteReceived = nil
+				r.Role = Follower
+				r.VotedFor = ""
+				r.Ticker.Reset(r.Timeout)
+				return
+			}
+
+			if res.Granted {
+				r.VoteReceived = append(r.VoteReceived, res.VoterId)
+				// Check majority
+				if len(r.VoteReceived) >= majority {
+					r.Role = Leader
+					r.CurrentLeader = r.Cluster.Self.ID
+
+					// Trigger log replication immediately upon becoming leader
+					for _, p := range peers {
+						r.SentLength[p.ID] = len(r.Logs)
+						r.AckLength[p.ID] = 0
+						go ReplicateLog(r.Cluster.Self.ID, p.ID)
+					}
+				}
+			}
+		}(peer)
 	}
+
 	return nil
 }
 
@@ -110,7 +184,7 @@ func (r *Raft) Heartbeat() error {
 		LeaderCommitIndex: r.CommitIndex,
 		PrevLogIndex:      prevLogIndex,
 		PrevLogTerm:       prevLogTerm,
-		LeaderID:          r.LeaderID,
+		CurrentLeader:     r.CurrentLeader,
 	}
 	payload, _ := json.Marshal(req)
 	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.heartbeat", nil, payload)
@@ -139,3 +213,5 @@ func (r *Raft) Heartbeat() error {
 	}
 	return nil
 }
+
+func ReplicateLog(nodeId, followerId string) {}

@@ -9,6 +9,8 @@ import (
 )
 
 func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var req VoteRequest
 	err := json.Unmarshal(msg.Payload, &req)
 	if err != nil {
@@ -18,38 +20,30 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 	}
 
 	var res VoteResponse
-	if r.Term > req.Term {
+	if r.Term < req.Term {
+		r.Term = req.Term
+		r.VotedFor = ""
+		r.Role = Follower
+	}
+	lastLogTerm := 0
+
+	if len(r.Logs) > 0 {
+		lastLogTerm = r.Logs[len(r.Logs)-1].Term
+	}
+	logOk := (lastLogTerm < req.LastLogTerm) || (lastLogTerm == req.LastLogTerm) && (len(r.Logs)-1 <= req.LastLogIndex)
+
+	if r.Term == req.Term && logOk && (r.VotedFor == "" || r.VotedFor == req.CandidateId) {
+		r.VotedFor = req.CandidateId
+		res.Granted = true
+		res.Term = r.Term
+		res.VoterId = r.Cluster.Self.ID
+	} else {
 		res.Granted = false
 		res.Term = r.Term
+		res.VoterId = r.Cluster.Self.ID
 
-	} else {
-
-		if req.Term > r.Term {
-			r.Term = req.Term
-			r.VotedFor = ""
-		}
-		res.Term = r.Term
-		if len(r.Logs) > 0 {
-			lastLog := r.Logs[len(r.Logs)-1]
-
-			if lastLog.Term > req.LastLogTerm ||
-				(lastLog.Term == req.LastLogTerm && lastLog.Index > req.LastLogIndex) || r.VotedFor != "" && r.VotedFor != req.CandidateId {
-				res.Granted = false
-			} else {
-				res.Granted = true
-			}
-		} else {
-			if r.VotedFor != "" && r.VotedFor != req.CandidateId {
-				res.Granted = false
-			} else {
-				res.Granted = true
-			}
-		}
 	}
-	if res.Granted == true {
-		r.Role = Follower
-		r.VotedFor = req.CandidateId
-	}
+
 	payload, err := json.Marshal(res)
 	return &pb.Message{
 		Id:      msg.Id,
@@ -63,9 +57,9 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.LeaderID != r.Cluster.Self.ID {
-		leader := r.Cluster.Nodes[r.LeaderID]
-		if r.LeaderID == "" {
+	if r.CurrentLeader != r.Cluster.Self.ID {
+		leader := r.Cluster.Nodes[r.CurrentLeader]
+		if r.CurrentLeader == "" {
 			return &pb.Message{Id: msg.Id, Error: "no leader currently elected"}
 		}
 		client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
@@ -95,7 +89,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	// broadcast the log to all the nodes in the cluster
 	appendEntry := &AppendEntriesReq{
 		Term:              r.Term,
-		LeaderID:          r.LeaderID,
+		CurrentLeader:     r.CurrentLeader,
 		Logs:              log,
 		PrevLogIndex:      prevLogIndex,
 		PrevLogTerm:       prevLogTerm,
@@ -198,7 +192,7 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 		r.Term = req.Term
 		r.Role = Follower
 	}
-	r.LeaderID = req.LeaderID
+	r.CurrentLeader = req.CurrentLeader
 	res.Success = true
 	res.Term = r.Term
 	payload, _ := json.Marshal(res)

@@ -22,13 +22,14 @@ type VoteRequest struct {
 }
 
 type VoteResponse struct {
-	Term    int  `json:"term"`
-	Granted bool `json:"granted"`
+	Term    int    `json:"term"`
+	Granted bool   `json:"granted"`
+	VoterId string `json:"voter_id"`
 }
 
 type AppendEntriesReq struct {
 	Term              int    `json:"term"`
-	LeaderID          string `json:"leader_id"`
+	CurrentLeader     string `json:"leader_id"`
 	Logs              Log    `json:"logs"`
 	PrevLogIndex      int    `json:"prev_log_index"`
 	PrevLogTerm       int    `json:"prev_log_term"`
