@@ -30,7 +30,7 @@ type VoteResponse struct {
 type AppendEntriesReq struct {
 	Term              int    `json:"term"`
 	CurrentLeader     string `json:"leader_id"`
-	Logs              Log    `json:"logs"`
+	Logs              []Log  `json:"logs"`
 	PrevLogIndex      int    `json:"prev_log_index"`
 	PrevLogTerm       int    `json:"prev_log_term"`
 	LeaderCommitIndex int    `json:"leader_commit_index"`
@@ -40,4 +40,5 @@ type AppendEntriesRes struct {
 	Term       int    `json:"term"`
 	Success    bool   `json:"success"`
 	FollowerID string `json:"follower_id"`
+	Ack        int    `json:"ack"`
 }

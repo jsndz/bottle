@@ -45,8 +45,13 @@ func NewRaft(cluster *cluster.Cluster) *Raft {
 	}
 }
 
-func (r *Raft) AppendLog(log Log) {
-	r.Logs = append(r.Logs, log)
+func (r *Raft) AppendLog(suffix []Log, prevLogIndex, leaderCommit int) {
+	if len(suffix) > 0 && len(r.Logs) > prevLogIndex {
+		index := min(len(r.Logs), len(suffix)+prevLogIndex)
+		if r.Logs[index].Term != suffix[index-prevLogIndex+1].Term {
+			r.Logs = r.Logs[0:prevLogIndex]
+		}
+	}
 }
 
 func (r *Raft) HeartbeatTicker() {
@@ -96,7 +101,7 @@ func (r *Raft) StartElection() error {
 		for _, peer := range peers {
 			r.SentLength[peer.ID] = len(r.Logs)
 			r.AckLength[peer.ID] = 0
-			go ReplicateLog(r.Cluster.Self.ID, peer.ID)
+			go r.ReplicateLog(r.Cluster.Self.ID, peer.ID)
 		}
 		return nil
 	}
@@ -165,7 +170,7 @@ func (r *Raft) StartElection() error {
 					for _, p := range peers {
 						r.SentLength[p.ID] = len(r.Logs)
 						r.AckLength[p.ID] = 0
-						go ReplicateLog(r.Cluster.Self.ID, p.ID)
+						go r.ReplicateLog(r.Cluster.Self.ID, p.ID)
 					}
 				}
 			}
@@ -214,4 +219,21 @@ func (r *Raft) Heartbeat() error {
 	return nil
 }
 
-func ReplicateLog(nodeId, followerId string) {}
+func (r *Raft) ReplicateLog(nodeId, followerId string) {
+	prevLogIndex := r.SentLength[followerId] - 1
+	suffix := r.Logs[prevLogIndex+1 : len(r.Logs)]
+	prevLogTerm := r.Logs[prevLogIndex].Term
+	AppendEntriesReq := &AppendEntriesReq{
+		Term:              r.Term,
+		LeaderCommitIndex: r.CommitIndex,
+		PrevLogIndex:      prevLogIndex,
+		PrevLogTerm:       prevLogTerm,
+		CurrentLeader:     r.CurrentLeader,
+		Logs:              suffix,
+	}
+	payload, err := json.Marshal(AppendEntriesReq)
+	if err != nil {
+		return
+	}
+	r.Cluster.SendToNode(followerId, "raft.logs", payload, nil)
+}

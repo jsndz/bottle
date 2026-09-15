@@ -3,7 +3,9 @@ package raft
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/jsndz/bottle/cluster"
 	"github.com/jsndz/bottle/rpc"
 	pb "github.com/jsndz/bottle/rpc/proto"
 )
@@ -78,7 +80,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		prevLogIndex = prevLog.Index
 		prevLogTerm = prevLog.Term
 	}
-
+	fmt.Printf("prevLogTerm: %v\n", prevLogTerm)
 	log := Log{
 		Term:    r.Term,
 		Command: (msg.Payload),
@@ -86,27 +88,35 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	}
 	// add the log to the raft logs
 	r.Logs = append(r.Logs, log)
+	r.AckLength[r.Cluster.Self.ID] = len(r.Logs)
+
 	// broadcast the log to all the nodes in the cluster
-	appendEntry := &AppendEntriesReq{
-		Term:              r.Term,
-		CurrentLeader:     r.CurrentLeader,
-		Logs:              log,
-		PrevLogIndex:      prevLogIndex,
-		PrevLogTerm:       prevLogTerm,
-		LeaderCommitIndex: r.CommitIndex,
-	}
-	payload, err := json.Marshal(appendEntry)
-	if err != nil {
-		return &pb.Message{
-			Error: err.Error(),
+	// appendEntry := &AppendEntriesReq{
+	// 	Term:              r.Term,
+	// 	CurrentLeader:     r.CurrentLeader,
+	// 	Logs:              log,
+	// 	PrevLogIndex:      prevLogIndex,
+	// 	PrevLogTerm:       prevLogTerm,
+	// 	LeaderCommitIndex: r.CommitIndex,
+	// }
+	peers := make([]*cluster.Node, 0)
+	for _, node := range r.Cluster.Nodes {
+		if node.ID != r.Cluster.Self.ID {
+			peers = append(peers, node)
 		}
 	}
-	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.append", nil, payload)
+
+	for _, peer := range peers {
+		go func(node *cluster.Node) {
+			r.ReplicateLog(peer.ID, node.ID)
+		}(peer)
+	}
+	numPeers := len(peers)
 	numberOfAppends := 1
 	majority := ((numPeers + 1) / 2) + 1
 
 	for i := 0; i < numPeers; i++ {
-		data := <-ch
+		var data *pb.Message
 		if data.Error != "" {
 			continue
 		}
@@ -160,42 +170,32 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 		prevLogTerm = prevLog.Term
 	}
 
-	if req.Term < r.Term {
-		res.Success = false
-		res.Term = r.Term
-		payload, _ := json.Marshal(res)
-
-		return &pb.Message{
-			Payload: payload,
-			Method:  msg.Method,
-		}
-	}
-	if req.PrevLogIndex > prevLogIndex || req.PrevLogTerm != prevLogTerm {
-		// if leader is greater then fine since follower can get the data
-		res.Success = false
-		res.Term = r.Term
-		payload, _ := json.Marshal(res)
-		// leader should jump back one by one and finds the match
-		return &pb.Message{
-			Payload: payload,
-			Method:  msg.Method,
-		}
-	}
-	if req.PrevLogIndex != prevLogIndex {
-		r.Logs = r.Logs[:req.PrevLogIndex]
-		r.Logs[req.PrevLogIndex+1] = req.Logs
-
-	} else {
-		r.Logs = append(r.Logs, req.Logs)
-	}
 	if req.Term > r.Term {
 		r.Term = req.Term
-		r.Role = Follower
+		r.VotedFor = ""
+		r.Ticker.Stop()
 	}
-	r.CurrentLeader = req.CurrentLeader
-	res.Success = true
-	res.Term = r.Term
+	if r.Term == req.Term {
+		r.Role = Follower
+		r.CurrentLeader = req.CurrentLeader
+
+	}
+	logOk := (req.PrevLogIndex <= prevLogIndex) && req.PrevLogIndex == 0 || req.PrevLogTerm == prevLogTerm
+
+	if r.Term == req.Term && logOk {
+		r.AppendLog(req.Logs, req.PrevLogIndex, r.CommitIndex)
+		ack := prevLogIndex + len(req.Logs)
+		res.Ack = ack
+		res.Success = true
+		res.Term = r.Term
+
+	} else {
+		res.Ack = 0
+		res.Success = false
+		res.Term = r.Term
+	}
 	payload, _ := json.Marshal(res)
+
 	return &pb.Message{
 		Method:  msg.Method,
 		Payload: payload,
