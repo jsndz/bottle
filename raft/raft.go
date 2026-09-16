@@ -52,6 +52,18 @@ func (r *Raft) AppendLog(suffix []Log, prevLogIndex, leaderCommit int) {
 			r.Logs = r.Logs[0:prevLogIndex]
 		}
 	}
+	if len(suffix)+prevLogIndex+1 > len(r.Logs) {
+		for i := len(r.Logs) - prevLogIndex; i < len(suffix)-1; i++ {
+			r.Logs = append(r.Logs, suffix[i])
+		}
+	}
+	if leaderCommit > r.CommitIndex {
+		for i := r.CommitIndex; i < leaderCommit; i++ {
+			//commit the log
+		}
+		r.CommitIndex = leaderCommit
+	}
+
 }
 
 func (r *Raft) HeartbeatTicker() {
