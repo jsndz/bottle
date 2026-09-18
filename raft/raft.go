@@ -3,12 +3,12 @@ package raft
 import (
 	"context"
 	"encoding/json"
-
 	"sync"
 	"time"
 
 	"github.com/jsndz/bottle/cluster"
 	"github.com/jsndz/bottle/rpc"
+	pb "github.com/jsndz/bottle/rpc/proto"
 )
 
 type Raft struct {
@@ -26,7 +26,7 @@ type Raft struct {
 	AckLength     map[string]int
 
 	Cluster *cluster.Cluster
-	Ticker  time.Ticker
+	Ticker  *time.Ticker
 	Timeout time.Duration
 	FSM     FSM
 }
@@ -37,7 +37,7 @@ func NewRaft(cluster *cluster.Cluster) *Raft {
 		Cluster:    cluster,
 		Role:       Follower,
 		Timeout:    timeout,
-		Ticker:     *time.NewTicker(timeout),
+		Ticker:     time.NewTicker(timeout),
 		Logs:       make([]Log, 0),
 		Term:       0,
 		SentLength: make(map[string]int),
@@ -46,35 +46,39 @@ func NewRaft(cluster *cluster.Cluster) *Raft {
 }
 
 func (r *Raft) AppendLog(suffix []Log, prevLogIndex, leaderCommit int) {
-	if len(suffix) > 0 && len(r.Logs) > prevLogIndex {
-		index := min(len(r.Logs), len(suffix)+prevLogIndex)
-		if r.Logs[index].Term != suffix[index-prevLogIndex+1].Term {
-			r.Logs = r.Logs[0:prevLogIndex]
-		}
-	}
-	if len(suffix)+prevLogIndex+1 > len(r.Logs) {
-		for i := len(r.Logs) - prevLogIndex; i < len(suffix)-1; i++ {
-			r.Logs = append(r.Logs, suffix[i])
+	for i, entry := range suffix {
+		idx := prevLogIndex + 1 + i
+		if idx <= len(r.Logs) {
+			if r.Logs[idx-1].Term != entry.Term {
+				r.Logs = r.Logs[:idx-1]
+				r.Logs = append(r.Logs, entry)
+			}
+		} else {
+			r.Logs = append(r.Logs, entry)
 		}
 	}
 	if leaderCommit > r.CommitIndex {
-		for i := r.CommitIndex; i < leaderCommit; i++ {
-			//commit the log
+		for i := r.CommitIndex; i < leaderCommit && i < len(r.Logs); i++ {
+			if r.FSM != nil {
+				r.FSM.Apply(r.Logs[i].Command)
+			}
 		}
-		r.CommitIndex = leaderCommit
+		r.CommitIndex = min(leaderCommit, len(r.Logs))
 	}
-
 }
 
 func (r *Raft) HeartbeatTicker() {
 	go func() {
 		for range r.Ticker.C {
-			if r.Role == Leader {
+			r.mu.Lock()
+			role := r.Role
+			r.mu.Unlock()
+
+			if role == Leader {
 				r.Heartbeat()
 			} else {
 				r.StartElection()
 			}
-
 		}
 	}()
 }
@@ -94,6 +98,9 @@ func (r *Raft) StartElection() error {
 	r.VotedFor = r.Cluster.Self.ID
 	r.VoteReceived = []string{r.VotedFor}
 	currentTerm := r.Term
+	if r.Ticker != nil {
+		r.Ticker.Reset(RandomElectionTimeout())
+	}
 
 	peers := make([]*cluster.Node, 0)
 	for _, node := range r.Cluster.Nodes {
@@ -167,7 +174,9 @@ func (r *Raft) StartElection() error {
 				r.VoteReceived = nil
 				r.Role = Follower
 				r.VotedFor = ""
-				r.Ticker.Reset(r.Timeout)
+				if r.Ticker != nil {
+					r.Ticker.Reset(r.Timeout)
+				}
 				return
 			}
 
@@ -216,7 +225,9 @@ func (r *Raft) Heartbeat() error {
 		if reply.Term > r.Term {
 			r.Term = reply.Term
 			r.Role = Follower
-			r.Ticker.Reset(r.Timeout)
+			if r.Ticker != nil {
+				r.Ticker.Reset(r.Timeout)
+			}
 			return nil
 		}
 
@@ -231,10 +242,23 @@ func (r *Raft) Heartbeat() error {
 	return nil
 }
 
-func (r *Raft) ReplicateLog(nodeId, followerId string) {
-	prevLogIndex := r.SentLength[followerId] - 1
-	suffix := r.Logs[prevLogIndex+1 : len(r.Logs)]
-	prevLogTerm := r.Logs[prevLogIndex].Term
+func (r *Raft) ReplicateLog(nodeId, followerId string) *pb.Message {
+	r.mu.Lock()
+	sentLen := r.SentLength[followerId]
+	if sentLen <= 0 {
+		sentLen = 1
+	}
+	prevLogIndex := sentLen - 1
+	prevLogTerm := 0
+	if prevLogIndex > 0 && prevLogIndex <= len(r.Logs) {
+		prevLogTerm = r.Logs[prevLogIndex-1].Term
+	}
+
+	suffix := make([]Log, 0)
+	if prevLogIndex < len(r.Logs) {
+		suffix = append(suffix, r.Logs[prevLogIndex:]...)
+	}
+
 	AppendEntriesReq := &AppendEntriesReq{
 		Term:              r.Term,
 		LeaderCommitIndex: r.CommitIndex,
@@ -244,8 +268,38 @@ func (r *Raft) ReplicateLog(nodeId, followerId string) {
 		Logs:              suffix,
 	}
 	payload, err := json.Marshal(AppendEntriesReq)
+	r.mu.Unlock()
+
 	if err != nil {
-		return
+		return &pb.Message{Error: err.Error()}
 	}
-	r.Cluster.SendToNode(followerId, "raft.logs", payload, nil)
+	return r.Cluster.SendToNode(followerId, "raft.logs", payload, nil)
+}
+
+func (r *Raft) CommitLogEntries() {
+	for r.CommitIndex < len(r.Logs) {
+		ack := 1 // Count the leader itself
+		peers := make([]*cluster.Node, 0)
+		for _, node := range r.Cluster.Nodes {
+			if node.ID != r.Cluster.Self.ID {
+				peers = append(peers, node)
+			}
+		}
+		numPeers := len(peers)
+		majority := ((numPeers + 1) / 2) + 1
+		for _, node := range peers {
+			if r.AckLength[node.ID] > r.CommitIndex {
+				ack += 1
+			}
+		}
+		if ack >= majority {
+			// commit the log
+			r.CommitIndex += 1
+			if r.FSM != nil {
+				r.FSM.Apply(r.Logs[r.CommitIndex-1].Command)
+			}
+		} else {
+			break
+		}
+	}
 }

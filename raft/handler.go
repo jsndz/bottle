@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jsndz/bottle/cluster"
 	"github.com/jsndz/bottle/rpc"
@@ -32,18 +33,20 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 	if len(r.Logs) > 0 {
 		lastLogTerm = r.Logs[len(r.Logs)-1].Term
 	}
-	logOk := (lastLogTerm < req.LastLogTerm) || (lastLogTerm == req.LastLogTerm) && (len(r.Logs)-1 <= req.LastLogIndex)
+	logOk := (lastLogTerm < req.LastLogTerm) || (lastLogTerm == req.LastLogTerm) && (len(r.Logs) <= req.LastLogIndex)
 
 	if r.Term == req.Term && logOk && (r.VotedFor == "" || r.VotedFor == req.CandidateId) {
 		r.VotedFor = req.CandidateId
 		res.Granted = true
 		res.Term = r.Term
 		res.VoterId = r.Cluster.Self.ID
+		if r.Ticker != nil {
+			r.Ticker.Reset(r.Timeout)
+		}
 	} else {
 		res.Granted = false
 		res.Term = r.Term
 		res.VoterId = r.Cluster.Self.ID
-
 	}
 
 	payload, err := json.Marshal(res)
@@ -90,68 +93,70 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	r.Logs = append(r.Logs, log)
 	r.AckLength[r.Cluster.Self.ID] = len(r.Logs)
 
-	// broadcast the log to all the nodes in the cluster
-	// appendEntry := &AppendEntriesReq{
-	// 	Term:              r.Term,
-	// 	CurrentLeader:     r.CurrentLeader,
-	// 	Logs:              log,
-	// 	PrevLogIndex:      prevLogIndex,
-	// 	PrevLogTerm:       prevLogTerm,
-	// 	LeaderCommitIndex: r.CommitIndex,
-	// }
 	peers := make([]*cluster.Node, 0)
 	for _, node := range r.Cluster.Nodes {
 		if node.ID != r.Cluster.Self.ID {
 			peers = append(peers, node)
 		}
 	}
+	numPeers := len(peers)
 
+	// Single node cluster
+	if numPeers == 0 {
+		r.CommitLogEntries()
+		return &pb.Message{
+			Method: "raft.appended",
+			Type:   pb.FrameType_UNARY,
+		}
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	ch := make(chan *pb.Message, numPeers)
 	for _, peer := range peers {
 		go func(node *cluster.Node) {
-			r.ReplicateLog(peer.ID, node.ID)
+			ch <- r.ReplicateLog(r.Cluster.Self.ID, node.ID)
 		}(peer)
 	}
-	numPeers := len(peers)
-	numberOfAppends := 1
-	majority := ((numPeers + 1) / 2) + 1
 
 	for i := 0; i < numPeers; i++ {
-		var data *pb.Message
-		if data.Error != "" {
-			continue
-		}
-		var res AppendEntriesRes
-		res.FollowerID = r.Cluster.Self.ID
-		if err := json.Unmarshal(data.Payload, &res); err != nil {
-			continue
-		}
-		if res.Success {
-			numberOfAppends++
-		}
-		if numberOfAppends >= majority {
+		select {
+		case resMsg := <-ch:
+			var res AppendEntriesRes
+			_ = json.Unmarshal(resMsg.Payload, &res)
+			if r.Term == res.Term && r.AckLength[res.FollowerID] <= res.Ack {
+				r.SentLength[res.FollowerID] = res.Ack
+				r.AckLength[res.FollowerID] = res.Ack
+				r.CommitLogEntries()
+			} else if r.SentLength[res.FollowerID] > 0 {
+				r.SentLength[res.FollowerID] -= 1
+				r.ReplicateLog(r.Cluster.Self.ID, res.FollowerID)
+			} else if r.Term < res.Term {
+				r.Role = Follower
+				r.Term = res.Term
+				r.VotedFor = ""
+				if r.Ticker != nil {
+					r.Ticker.Reset(r.Timeout)
+				}
+			}
+		case <-ctxTimeout.Done():
 			break
 		}
 	}
-	if numberOfAppends < majority {
+
+	if r.CommitIndex >= log.Index {
 		return &pb.Message{
-			Id:    msg.Id,
-			Error: "failed to reach quorum consensus",
+			Method: "raft.appended",
+			Type:   pb.FrameType_UNARY,
 		}
 	}
-	// if quorum is reached, commit the log and return success
-	r.CommitIndex = log.Index
-	r.FSM.Apply(log.Command)
 	return &pb.Message{
-		Method: "raft.appended",
-		Type:   pb.FrameType_UNARY,
+		Id:    msg.Id,
+		Error: "failed to reach quorum consensus",
 	}
 }
 
 func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
-	// assuming reciever is follower
-	// check term if greater then add to log
-	//apply to FSM on heartbeat
-
 	var req AppendEntriesReq
 	if err := json.Unmarshal(msg.Payload, &req); err != nil {
 		return &pb.Message{
@@ -161,34 +166,31 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var prevLogIndex, prevLogTerm int
 	var res AppendEntriesRes
 	res.FollowerID = r.Cluster.Self.ID
-	if len(r.Logs) > 0 {
-		prevLog := r.Logs[len(r.Logs)-1]
-		prevLogIndex = prevLog.Index
-		prevLogTerm = prevLog.Term
-	}
 
 	if req.Term > r.Term {
 		r.Term = req.Term
 		r.VotedFor = ""
-		r.Ticker.Stop()
+		if r.Ticker != nil {
+			r.Ticker.Reset(r.Timeout)
+		}
 	}
 	if r.Term == req.Term {
 		r.Role = Follower
 		r.CurrentLeader = req.CurrentLeader
-
+		if r.Ticker != nil {
+			r.Ticker.Reset(r.Timeout)
+		}
 	}
-	logOk := (req.PrevLogIndex <= prevLogIndex) && req.PrevLogIndex == 0 || req.PrevLogTerm == prevLogTerm
+	logOk := (req.PrevLogIndex == 0) || (req.PrevLogIndex <= len(r.Logs) && r.Logs[req.PrevLogIndex-1].Term == req.PrevLogTerm)
 
 	if r.Term == req.Term && logOk {
-		r.AppendLog(req.Logs, req.PrevLogIndex, r.CommitIndex)
-		ack := prevLogIndex + len(req.Logs)
+		r.AppendLog(req.Logs, req.PrevLogIndex, req.LeaderCommitIndex)
+		ack := req.PrevLogIndex + len(req.Logs)
 		res.Ack = ack
 		res.Success = true
 		res.Term = r.Term
-
 	} else {
 		res.Ack = 0
 		res.Success = false
@@ -197,45 +199,18 @@ func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
 	payload, _ := json.Marshal(res)
 
 	return &pb.Message{
-		Method:  msg.Method,
+		Method:  "raft.log",
 		Payload: payload,
 	}
 }
 
 func (r *Raft) HandleHeartbeat(ctx context.Context, msg *pb.Message) *pb.Message {
-	var req AppendEntriesReq
-	err := json.Unmarshal(msg.Payload, &req)
-	if err != nil {
-		return &pb.Message{
-			Error: err.Error(),
-		}
-	}
-	var res AppendEntriesRes
-	res.FollowerID = r.Cluster.Self.ID
-	lastLogTerm, lastLogIndex := r.GetPrevLog()
-	if req.Term < r.Term || lastLogTerm > req.PrevLogTerm || lastLogIndex > req.PrevLogIndex {
-		res.Success = false
-		res.Term = r.Term
-	} else {
-		res.Success = true
-		res.Term = req.Term
-		r.mu.Lock()
-		r.Term = req.Term
-		r.Ticker.Reset(r.Timeout)
-		r.mu.Unlock()
-	}
-	//handle log mismatch
-
-	payload, _ := json.Marshal(res)
-	return &pb.Message{
-		Method:  msg.Method,
-		Payload: payload,
-	}
+	return r.HandleAppend(ctx, msg)
 }
 
 func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("raft.election", r.HandleElection, nil)
 	rpcServer.Handler.AddHandler("raft.client.command", r.HandleClientCommand, nil)
-	rpcServer.Handler.AddHandler("raft.append", r.HandleAppend, nil)
+	rpcServer.Handler.AddHandler("raft.logs", r.HandleAppend, nil)
 	rpcServer.Handler.AddHandler("raft.heartbeat", r.HandleHeartbeat, nil)
 }
