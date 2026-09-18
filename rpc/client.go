@@ -46,15 +46,24 @@ func (c *Client) NewConnection() *Connection {
 	}
 }
 
+func (c *Client) prepareConn(ctx context.Context, headers map[string]string) (*Connection, net.Conn, map[string]string) {
+	connection := c.Pool.Get(c.Addr)
+	conn := *connection.Conn
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
+	}
+	return connection, conn, headers
+}
+
 // PING
 func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
-	connection := c.Pool.Get(c.Addr)
+	connection, conn, _ := c.prepareConn(ctx, nil)
 	defer c.Pool.Release(c.Addr, connection.ID)
-	conn := *connection.Conn
-	deadline, ok := ctx.Deadline()
-	if ok {
-		conn.SetDeadline(deadline)
-	}
+
 	pingMsg := &pb.Message{
 		Type: pb.FrameType_HEARTBEAT,
 	}
@@ -64,8 +73,7 @@ func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
 	}
 
 	if err := writeFrame(conn, reqBytes); err != nil {
-		var retries uint
-		retries = 0
+		var retries uint = 0
 		err := c.Retry(ctx, conn, reqBytes, &retries)
 		return nil, err
 	}
@@ -84,39 +92,35 @@ func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
 
 // Call is UNARY
 func (c *Client) Call(ctx context.Context, method string, payload []byte, headers map[string]string) (*pb.Message, error) {
-	connection := c.Pool.Get(c.Addr)
-	conn := *connection.Conn
-	deadline, ok := ctx.Deadline()
-	if headers == nil {
-		headers = make(map[string]string)
-	}
-	if ok {
-		conn.SetDeadline(deadline)
-		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
-	}
+	connection, conn, headers := c.prepareConn(ctx, headers)
+
 	req, err := UnaryMessage(method, payload, headers)
 	if err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	if err := writeFrame(conn, reqBytes); err != nil {
-		var retries uint
-		retries = 0
+		var retries uint = 0
 		err := c.Retry(ctx, conn, reqBytes, &retries)
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	respBytes, err := readFrame(conn)
 	if err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	resp := &pb.Message{}
 	if err := proto.Unmarshal(respBytes, resp); err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 	if resp.Type == pb.FrameType_UNARY {
@@ -128,26 +132,21 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 
 // client side it for asking data
 func (c *Client) StartStream(ctx context.Context, method string, payload []byte, headers map[string]string) (<-chan *pb.Message, error) {
-	connection := c.Pool.Get(c.Addr)
-	conn := *connection.Conn
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-		if headers == nil {
-			headers = make(map[string]string)
-		}
-		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
-	}
+	connection, conn, headers := c.prepareConn(ctx, headers)
 
 	req, err := StreamRequestMessage(method, payload, headers)
 	if err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	if err := writeFrame(conn, reqBytes); err != nil {
+		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 	ch := make(chan *pb.Message, 100)

@@ -67,14 +67,26 @@ func (c *Cluster) Join(addr string) error {
 	return nil
 }
 
-func (c *Cluster) BroadCast(method string, headers map[string]string, payload []byte) error {
+func (c *Cluster) Peers() []*Node {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
+	peers := make([]*Node, 0, len(c.Nodes))
 	for _, node := range c.Nodes {
-		if node.ID == c.Self.ID {
-			continue
+		if node.ID != c.Self.ID {
+			peers = append(peers, node)
 		}
+	}
+	return peers
+}
+
+func (c *Cluster) QuorumSize() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return (len(c.Nodes) / 2) + 1
+}
+
+func (c *Cluster) BroadCast(method string, headers map[string]string, payload []byte) error {
+	for _, node := range c.Peers() {
 		go func(addr string) {
 			client := rpc.NewClient(addr, 1, c.Pool)
 			client.Call(context.Background(), method, payload, headers)
@@ -85,31 +97,22 @@ func (c *Cluster) BroadCast(method string, headers map[string]string, payload []
 
 func (c *Cluster) Heartbeat() {
 	payload, _ := json.Marshal(c.Self)
-	c.mu.RLock()
-	peers := make([]*Node, 0, len(c.Nodes))
-	for _, node := range c.Nodes {
-		if node.ID != c.Self.ID {
-			peers = append(peers, node)
-		}
-	}
-	c.mu.RUnlock()
-
+	peers := c.Peers()
 	if len(peers) == 0 {
 		return
 	}
 
 	ch := make(chan *pb.Message, len(peers))
 	for _, node := range peers {
-
 		go func(node *Node) {
 			client := rpc.NewClient(node.Address, 1, c.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			reply, err := client.Call(ctx, "cluster.heartbeat", payload, nil)
 			if err != nil {
-				payload, _ := json.Marshal(node)
+				nodePayload, _ := json.Marshal(node)
 				ch <- &pb.Message{
-					Payload: payload,
+					Payload: nodePayload,
 					Error:   "No Reply",
 				}
 				return
@@ -150,15 +153,7 @@ func (c *Cluster) Leave(cl *rpc.Client) error {
 }
 
 func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string, payload []byte) (chan *pb.Message, int) {
-	c.mu.RLock()
-	peers := make([]*Node, 0, len(c.Nodes))
-	for _, node := range c.Nodes {
-		if node.ID != c.Self.ID {
-			peers = append(peers, node)
-		}
-	}
-	c.mu.RUnlock()
-
+	peers := c.Peers()
 	if len(peers) == 0 {
 		return nil, 0
 	}

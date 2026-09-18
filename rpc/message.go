@@ -27,3 +27,20 @@ func StreamRequestMessage(method string, payload []byte, headers map[string]stri
 
 	return &message, nil
 }
+
+func NewUnaryResponse(req *pb.Message, payload []byte, errStr string) *pb.Message {
+	method := ""
+	var id uint32
+	if req != nil {
+		method = req.Method
+		id = req.Id
+	}
+	return &pb.Message{
+		Id:      id,
+		Type:    pb.FrameType_UNARY,
+		Method:  method,
+		Payload: payload,
+		Error:   errStr,
+	}
+}
+

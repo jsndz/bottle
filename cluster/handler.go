@@ -13,22 +13,12 @@ import (
 func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 	var joiningNode Node
 	if err := json.Unmarshal(msg.Payload, &joiningNode); err != nil {
-		return &pb.Message{
-			Id:     msg.Id,
-			Type:   pb.FrameType_UNARY,
-			Method: msg.Method,
-			Error:  "Invalid Payload",
-		}
+		return rpc.NewUnaryResponse(msg, nil, "Invalid Payload")
 	}
 	client := rpc.NewClient(joiningNode.Address, 1, c.Pool)
 	_, err := client.Ping(ctx)
 	if err != nil {
-		return &pb.Message{
-			Id:     msg.Id,
-			Type:   pb.FrameType_UNARY,
-			Method: msg.Method,
-			Error:  "Can't Connect",
-		}
+		return rpc.NewUnaryResponse(msg, nil, "Can't Connect")
 	}
 	c.mu.Lock()
 	joiningNode.State = ACTIVE
@@ -37,12 +27,7 @@ func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 	payload, _ := json.Marshal(c)
 	c.BroadCast("cluster.update", nil, payload)
 
-	return &pb.Message{
-		Id:      msg.Id,
-		Type:    pb.FrameType_UNARY,
-		Method:  msg.Method,
-		Payload: payload,
-	}
+	return rpc.NewUnaryResponse(msg, payload, "")
 }
 
 func (c *Cluster) HandleUpdate(ctx context.Context, msg *pb.Message) *pb.Message {
@@ -51,12 +36,7 @@ func (c *Cluster) HandleUpdate(ctx context.Context, msg *pb.Message) *pb.Message
 	c.mu.Lock()
 	c.Nodes = cls.Nodes
 	c.mu.Unlock()
-	return &pb.Message{
-		Id:      msg.Id,
-		Type:    pb.FrameType_UNARY,
-		Method:  msg.Method,
-		Payload: nil,
-	}
+	return rpc.NewUnaryResponse(msg, nil, "")
 }
 
 func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message {
@@ -65,12 +45,7 @@ func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message 
 	c.mu.Lock()
 	delete(c.Nodes, node.ID)
 	c.mu.Unlock()
-	return &pb.Message{
-		Id:      msg.Id,
-		Type:    pb.FrameType_UNARY,
-		Method:  msg.Method,
-		Payload: nil,
-	}
+	return rpc.NewUnaryResponse(msg, nil, "")
 }
 func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Message {
 	payload, _ := json.Marshal(c.Self)
@@ -86,12 +61,7 @@ func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Mess
 		}
 		c.mu.Unlock()
 	}
-	return &pb.Message{
-		Id:      msg.Id,
-		Type:    pb.FrameType_UNARY,
-		Method:  msg.Method,
-		Payload: payload,
-	}
+	return rpc.NewUnaryResponse(msg, payload, "")
 }
 
 func (c *Cluster) RegisterHandlers(rpcServer *rpc.Server) {

@@ -83,6 +83,17 @@ func (r *Raft) HeartbeatTicker() {
 	}()
 }
 
+func (r *Raft) convertToFollower(term int, leaderID string) {
+	r.Role = Follower
+	r.Term = term
+	r.VotedFor = ""
+	r.VoteReceived = nil
+	r.CurrentLeader = leaderID
+	if r.Ticker != nil {
+		r.Ticker.Reset(r.Timeout)
+	}
+}
+
 func (r *Raft) GetPrevLog() (int, int) {
 	if len(r.Logs) > 0 {
 		prevLog := r.Logs[len(r.Logs)-1]
@@ -102,15 +113,8 @@ func (r *Raft) StartElection() error {
 		r.Ticker.Reset(RandomElectionTimeout())
 	}
 
-	peers := make([]*cluster.Node, 0)
-	for _, node := range r.Cluster.Nodes {
-		if node.ID != r.Cluster.Self.ID {
-			peers = append(peers, node)
-		}
-	}
-
-	totalNodes := len(peers) + 1
-	majority := (totalNodes / 2) + 1
+	peers := r.Cluster.Peers()
+	majority := r.Cluster.QuorumSize()
 
 	// Single-node cluster case
 	if len(r.VoteReceived) >= majority {
@@ -125,14 +129,11 @@ func (r *Raft) StartElection() error {
 		return nil
 	}
 
-	lastLogTerm := 0
-	if len(r.Logs) > 0 {
-		lastLogTerm = r.Logs[len(r.Logs)-1].Term
-	}
+	lastLogTerm, lastLogIndex := r.GetPrevLog()
 
 	req := VoteRequest{
 		Term:         currentTerm,
-		LastLogIndex: len(r.Logs),
+		LastLogIndex: lastLogIndex,
 		LastLogTerm:  lastLogTerm,
 		CandidateId:  r.Cluster.Self.ID,
 	}
@@ -170,13 +171,7 @@ func (r *Raft) StartElection() error {
 
 			// Step down if peer has higher term
 			if res.Term > r.Term {
-				r.Term = res.Term
-				r.VoteReceived = nil
-				r.Role = Follower
-				r.VotedFor = ""
-				if r.Ticker != nil {
-					r.Ticker.Reset(r.Timeout)
-				}
+				r.convertToFollower(res.Term, "")
 				return
 			}
 
@@ -223,11 +218,7 @@ func (r *Raft) Heartbeat() error {
 		var reply AppendEntriesRes
 		json.Unmarshal(data.Payload, &reply)
 		if reply.Term > r.Term {
-			r.Term = reply.Term
-			r.Role = Follower
-			if r.Ticker != nil {
-				r.Ticker.Reset(r.Timeout)
-			}
+			r.convertToFollower(reply.Term, "")
 			return nil
 		}
 
@@ -277,16 +268,10 @@ func (r *Raft) ReplicateLog(nodeId, followerId string) *pb.Message {
 }
 
 func (r *Raft) CommitLogEntries() {
+	peers := r.Cluster.Peers()
+	majority := r.Cluster.QuorumSize()
 	for r.CommitIndex < len(r.Logs) {
 		ack := 1 // Count the leader itself
-		peers := make([]*cluster.Node, 0)
-		for _, node := range r.Cluster.Nodes {
-			if node.ID != r.Cluster.Self.ID {
-				peers = append(peers, node)
-			}
-		}
-		numPeers := len(peers)
-		majority := ((numPeers + 1) / 2) + 1
 		for _, node := range peers {
 			if r.AckLength[node.ID] > r.CommitIndex {
 				ack += 1
