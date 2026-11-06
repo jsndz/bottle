@@ -3,7 +3,6 @@ package raft
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/jsndz/bottle/cluster"
@@ -54,7 +53,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		if r.CurrentLeader == "" {
 			return rpc.NewUnaryResponse(msg, nil, "no leader currently elected")
 		}
-		client := rpc.NewClient(leader.Address, 1, r.Cluster.Pool)
+		client := rpc.NewClient(leader.Address, r.Cluster.Pool)
 		reply, err := client.Call(context.Background(), msg.Method, msg.Payload, msg.Headers)
 		if err != nil {
 			return rpc.NewUnaryResponse(msg, nil, err.Error())
@@ -62,8 +61,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 		return reply
 	}
 
-	prevLogTerm, prevLogIndex := r.GetPrevLog()
-	fmt.Printf("prevLogTerm: %v\n", prevLogTerm)
+	_, prevLogIndex := r.GetPrevLog()
 	log := Log{
 		Term:    r.Term,
 		Command: msg.Payload,
@@ -89,7 +87,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 	ch := make(chan *pb.Message, numPeers)
 	for _, peer := range peers {
 		go func(node *cluster.Node) {
-			ch <- r.ReplicateLog(r.Cluster.Self.ID, node.ID)
+			ch <- r.ReplicateLog(node.ID)
 		}(peer)
 	}
 
@@ -104,7 +102,7 @@ func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Mes
 				r.CommitLogEntries()
 			} else if r.SentLength[res.FollowerID] > 0 {
 				r.SentLength[res.FollowerID] -= 1
-				r.ReplicateLog(r.Cluster.Self.ID, res.FollowerID)
+				r.ReplicateLog(res.FollowerID)
 			} else if r.Term < res.Term {
 				r.convertToFollower(res.Term, "")
 			}

@@ -9,45 +9,29 @@ import (
 	"net"
 	"time"
 
-	"github.com/google/uuid"
 	pb "github.com/jsndz/bottle/rpc/proto"
 	"google.golang.org/protobuf/proto"
 )
 
 type Client struct {
-	ID       string
 	Pool     *GlobalPool
-	MaxConn  uint8
 	MaxRetry uint
 	Addr     string
 }
 
-func NewClient(port string, maxConn uint8, pool *GlobalPool) *Client {
+func NewClient(addr string, pool *GlobalPool) *Client {
 	return &Client{
-		ID:      uuid.NewString(),
-		Pool:    pool,
-		MaxConn: maxConn,
-		Addr:    port,
+		Pool:     pool,
+		MaxRetry: 3,
+		Addr:     addr,
 	}
 }
 
-func (c *Client) NewConnection() *Connection {
-	conn, err := net.Dial("tcp", c.Addr)
-	if err != nil {
-		return nil
-	}
-
-	return &Connection{
-		ID:        uuid.NewString(),
-		Conn:      &conn,
-		CreatedAt: time.Now(),
-		LastUsed:  time.Now(),
-		Busy:      false,
-	}
-}
-
-func (c *Client) prepareConn(ctx context.Context, headers map[string]string) (*Connection, net.Conn, map[string]string) {
+func (c *Client) prepareConn(ctx context.Context, headers map[string]string) (*Connection, net.Conn, map[string]string, error) {
 	connection := c.Pool.Get(c.Addr)
+	if connection == nil || connection.Conn == nil || *connection.Conn == nil {
+		return nil, nil, nil, errors.New("failed to acquire connection to " + c.Addr)
+	}
 	conn := *connection.Conn
 	if headers == nil {
 		headers = make(map[string]string)
@@ -56,12 +40,15 @@ func (c *Client) prepareConn(ctx context.Context, headers map[string]string) (*C
 		conn.SetDeadline(deadline)
 		headers["X-Timeout"] = deadline.Format(time.RFC3339Nano)
 	}
-	return connection, conn, headers
+	return connection, conn, headers, nil
 }
 
 // PING
 func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
-	connection, conn, _ := c.prepareConn(ctx, nil)
+	connection, conn, _, err := c.prepareConn(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
 	defer c.Pool.Release(c.Addr, connection.ID)
 
 	pingMsg := &pb.Message{
@@ -74,8 +61,9 @@ func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
 
 	if err := writeFrame(conn, reqBytes); err != nil {
 		var retries uint = 0
-		err := c.Retry(ctx, conn, reqBytes, &retries)
-		return nil, err
+		if retryErr := c.Retry(ctx, conn, reqBytes, &retries); retryErr != nil {
+			return nil, retryErr
+		}
 	}
 	respBytes, err := readFrame(conn)
 	if err != nil {
@@ -92,39 +80,33 @@ func (c *Client) Ping(ctx context.Context) (*pb.Message, error) {
 
 // Call is UNARY
 func (c *Client) Call(ctx context.Context, method string, payload []byte, headers map[string]string) (*pb.Message, error) {
-	connection, conn, headers := c.prepareConn(ctx, headers)
-
-	req, err := UnaryMessage(method, payload, headers)
+	connection, conn, headers, err := c.prepareConn(ctx, headers)
 	if err != nil {
-		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
+	defer c.Pool.Release(c.Addr, connection.ID)
+
+	req, _ := UnaryMessage(method, payload, headers)
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
-		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	if err := writeFrame(conn, reqBytes); err != nil {
 		var retries uint = 0
-		err := c.Retry(ctx, conn, reqBytes, &retries)
-		c.Pool.Release(c.Addr, connection.ID)
-		return nil, err
+		if retryErr := c.Retry(ctx, conn, reqBytes, &retries); retryErr != nil {
+			return nil, retryErr
+		}
 	}
 
 	respBytes, err := readFrame(conn)
 	if err != nil {
-		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
 
 	resp := &pb.Message{}
 	if err := proto.Unmarshal(respBytes, resp); err != nil {
-		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
-	}
-	if resp.Type == pb.FrameType_UNARY {
-		c.Pool.Release(c.Addr, connection.ID)
 	}
 
 	return resp, nil
@@ -132,13 +114,12 @@ func (c *Client) Call(ctx context.Context, method string, payload []byte, header
 
 // client side it for asking data
 func (c *Client) StartStream(ctx context.Context, method string, payload []byte, headers map[string]string) (<-chan *pb.Message, error) {
-	connection, conn, headers := c.prepareConn(ctx, headers)
-
-	req, err := StreamRequestMessage(method, payload, headers)
+	connection, conn, headers, err := c.prepareConn(ctx, headers)
 	if err != nil {
-		c.Pool.Release(c.Addr, connection.ID)
 		return nil, err
 	}
+
+	req, _ := StreamRequestMessage(method, payload, headers)
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
 		c.Pool.Release(c.Addr, connection.ID)

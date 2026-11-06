@@ -19,17 +19,18 @@ type Cluster struct {
 	Pool  *rpc.GlobalPool
 }
 
-func NewCluster(Self *Node, srv *rpc.Server, id string) *Cluster {
-	Nodes := make(map[string]*Node)
-	Nodes[Self.ID] = Self
-	Pool := rpc.NewGlobalPool()
+func NewCluster(self *Node, srv *rpc.Server, id string) *Cluster {
+	nodes := make(map[string]*Node)
+	nodes[self.ID] = self
 	cls := &Cluster{
 		ID:    id,
-		Nodes: Nodes,
-		Self:  Self,
-		Pool:  Pool,
+		Nodes: nodes,
+		Self:  self,
+		Pool:  rpc.NewGlobalPool(),
 	}
-	cls.RegisterHandlers(srv)
+	if srv != nil {
+		cls.RegisterHandlers(srv)
+	}
 	return cls
 }
 
@@ -45,18 +46,27 @@ func (c *Cluster) HeartbeatTicker() {
 
 // node as a joining node
 func (c *Cluster) Join(addr string) error {
-
-	client := rpc.NewClient(addr, 1, c.Pool)
+	client := rpc.NewClient(addr, c.Pool)
 	payload, _ := json.Marshal(c.Self)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	resp, _ := client.Call(ctx, "cluster.join", payload, nil)
-	if resp.Error != "" {
-		return errors.New("Failed to Join the Cluster " + resp.Error)
+
+	resp, err := client.Call(ctx, "cluster.join", payload, nil)
+	if err != nil {
+		return errors.New("failed to join the cluster: " + err.Error())
 	}
-	// in payload it with c.Nodes
+	if resp == nil || resp.Error != "" {
+		errMsg := "unknown error"
+		if resp != nil {
+			errMsg = resp.Error
+		}
+		return errors.New("failed to join the cluster: " + errMsg)
+	}
+
 	var cls Cluster
-	json.Unmarshal(resp.Payload, &cls)
+	if err := json.Unmarshal(resp.Payload, &cls); err != nil {
+		return errors.New("failed to parse cluster state: " + err.Error())
+	}
 
 	c.mu.Lock()
 	c.Nodes = cls.Nodes
@@ -88,7 +98,7 @@ func (c *Cluster) QuorumSize() int {
 func (c *Cluster) BroadCast(method string, headers map[string]string, payload []byte) error {
 	for _, node := range c.Peers() {
 		go func(addr string) {
-			client := rpc.NewClient(addr, 1, c.Pool)
+			client := rpc.NewClient(addr, c.Pool)
 			client.Call(context.Background(), method, payload, headers)
 		}(node.Address)
 	}
@@ -102,45 +112,43 @@ func (c *Cluster) Heartbeat() {
 		return
 	}
 
-	ch := make(chan *pb.Message, len(peers))
+	type peerResult struct {
+		node *Node
+		err  error
+	}
+
+	ch := make(chan peerResult, len(peers))
 	for _, node := range peers {
 		go func(node *Node) {
-			client := rpc.NewClient(node.Address, 1, c.Pool)
+			client := rpc.NewClient(node.Address, c.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			reply, err := client.Call(ctx, "cluster.heartbeat", payload, nil)
-			if err != nil {
-				nodePayload, _ := json.Marshal(node)
-				ch <- &pb.Message{
-					Payload: nodePayload,
-					Error:   "No Reply",
-				}
-				return
-			}
-			ch <- reply
+			_, err := client.Call(ctx, "cluster.heartbeat", payload, nil)
+			ch <- peerResult{node: node, err: err}
 		}(node)
 	}
+
 	for i := 0; i < len(peers); i++ {
-		msg := <-ch
-		var node Node
-		json.Unmarshal(msg.Payload, &node)
+		res := <-ch
 		c.mu.Lock()
-		if msg.Error == "No Reply" {
-			c.Nodes[node.ID].MissedHeartbeats++
-			if c.Nodes[node.ID].MissedHeartbeats > 3 {
-				c.Nodes[node.ID].State = DEAD
-				c.Nodes[node.ID].MissedHeartbeats = 0
+		if node, ok := c.Nodes[res.node.ID]; ok && node != nil {
+			if res.err != nil {
+				node.MissedHeartbeats++
+				if node.MissedHeartbeats > 3 {
+					node.State = DEAD
+					node.MissedHeartbeats = 0
+				}
+			} else {
+				node.State = ACTIVE
+				node.MissedHeartbeats = 0
+				node.LastPing = time.Now()
 			}
-			c.mu.Unlock()
-			continue
 		}
-		c.Nodes[node.ID].State = ACTIVE
-		c.Nodes[node.ID].LastPing = time.Now()
 		c.mu.Unlock()
 	}
 }
 
-func (c *Cluster) Leave(cl *rpc.Client) error {
+func (c *Cluster) Leave() error {
 	payload, _ := json.Marshal(c.Self)
 	c.mu.Lock()
 	c.ID = ""
@@ -161,10 +169,10 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 
 	for _, node := range peers {
 		go func(node *Node) {
-			client := rpc.NewClient(node.Address, 1, c.Pool)
+			client := rpc.NewClient(node.Address, c.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			reply, err := client.Call(ctx, method, payload, nil)
+			reply, err := client.Call(ctx, method, payload, headers)
 			if err != nil {
 				ch <- &pb.Message{
 					Method:  method,
@@ -180,8 +188,18 @@ func (c *Cluster) BroadcastWithChannel(method string, headers map[string]string,
 }
 
 func (c *Cluster) SendToNode(nodeId string, method string, payload []byte, headers map[string]string) *pb.Message {
-	node := c.Nodes[nodeId]
-	client := rpc.NewClient(node.Address, 1, c.Pool)
+	c.mu.RLock()
+	node, ok := c.Nodes[nodeId]
+	c.mu.RUnlock()
+	if !ok || node == nil {
+		return &pb.Message{
+			Method:  method,
+			Payload: nil,
+			Error:   "node not found",
+		}
+	}
+
+	client := rpc.NewClient(node.Address, c.Pool)
 	res, err := client.Call(context.Background(), method, payload, headers)
 	if err != nil {
 		return &pb.Message{

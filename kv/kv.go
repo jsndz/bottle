@@ -1,21 +1,32 @@
 package kv
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sync"
+)
 
 type Command struct {
-	Key   string
-	Value string
-	Op    string
+	Op    string `json:"op"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type KVStore struct {
-	commands []Command
+	mu   sync.RWMutex
+	data map[string]string
 }
 
 func NewKVStore() *KVStore {
 	return &KVStore{
-		commands: make([]Command, 0),
+		data: make(map[string]string),
 	}
+}
+
+func (kv *KVStore) Get(key string) (string, bool) {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+	val, ok := kv.data[key]
+	return val, ok
 }
 
 func (kv *KVStore) Apply(data []byte) any {
@@ -23,6 +34,18 @@ func (kv *KVStore) Apply(data []byte) any {
 	if err := json.Unmarshal(data, &cmd); err != nil {
 		return err
 	}
-	kv.commands = append(kv.commands, cmd)
-	return nil
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	switch cmd.Op {
+	case "PUT", "put", "SET", "set":
+		kv.data[cmd.Key] = cmd.Value
+		return cmd.Value
+	case "DELETE", "delete", "DEL", "del":
+		delete(kv.data, cmd.Key)
+		return nil
+	default:
+		kv.data[cmd.Key] = cmd.Value
+		return cmd.Value
+	}
 }

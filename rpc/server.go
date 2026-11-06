@@ -34,55 +34,89 @@ func handleConn(conn net.Conn, handler *Handler) {
 		if err := proto.Unmarshal(buf, req); err != nil {
 			return
 		}
-		var ctx context.Context
-		deadline, _ := req.Headers["X-Timeout"]
 
-		d, _ := time.Parse(time.RFC3339Nano, deadline)
-		ctx, cancel := context.WithDeadline(context.Background(), d)
-		defer cancel()
-
-		var res *pb.Message
-		if req.Type == pb.FrameType_HEARTBEAT {
-			res = &pb.Message{
-				Id:   req.Id,
-				Type: pb.FrameType_HEARTBEAT,
-			}
-
-			data, err := proto.Marshal(res)
-			if err != nil {
-				return
-			}
-			_ = writeFrame(conn, data)
-			continue
-		} else if req.Type == pb.FrameType_STREAM_START {
-			fn, _ := handler.GetStreamMethod(req.Method)
-			stream := &ServerStream{
-				id:   req.Id,
-				conn: conn,
-			}
-			go fn(ctx, req, stream)
-		} else if req.Type == pb.FrameType_UNARY {
-			fn, ok := handler.Get(req.Method)
-			if !ok {
-				res = &pb.Message{
-					Id:      req.Id,
-					Payload: []byte("method not found: " + req.Method),
-				}
-			} else {
-				res = fn(ctx, req)
-			}
-
-			data, err := proto.Marshal(res)
-			if err != nil {
-				return
-			}
-			_ = writeFrame(conn, data)
+		if err := dispatchMessage(conn, handler, req); err != nil {
+			return
 		}
 	}
 }
 
+func requestContext(req *pb.Message) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if deadline, ok := req.Headers["X-Timeout"]; ok && deadline != "" {
+		if d, err := time.Parse(time.RFC3339Nano, deadline); err == nil {
+			return context.WithDeadline(ctx, d)
+		}
+	}
+	return ctx, func() {}
+}
+
+func dispatchMessage(conn net.Conn, handler *Handler, req *pb.Message) error {
+	ctx, cancel := requestContext(req)
+
+	switch req.Type {
+	case pb.FrameType_HEARTBEAT:
+		cancel()
+		res := &pb.Message{
+			Id:   req.Id,
+			Type: pb.FrameType_HEARTBEAT,
+		}
+		data, err := proto.Marshal(res)
+		if err != nil {
+			return err
+		}
+		return writeFrame(conn, data)
+
+	case pb.FrameType_STREAM_START:
+		fn, ok := handler.GetStreamMethod(req.Method)
+		if !ok {
+			cancel()
+			return nil
+		}
+		stream := &ServerStream{
+			id:   req.Id,
+			conn: conn,
+		}
+		go func() {
+			defer cancel()
+			fn(ctx, req, stream)
+		}()
+		return nil
+
+	case pb.FrameType_UNARY:
+		defer cancel()
+		var res *pb.Message
+		fn, ok := handler.Get(req.Method)
+		if !ok {
+			res = &pb.Message{
+				Id:      req.Id,
+				Type:    pb.FrameType_UNARY,
+				Method:  req.Method,
+				Payload: []byte("method not found: " + req.Method),
+				Error:   "method not found: " + req.Method,
+			}
+		} else {
+			res = fn(ctx, req)
+		}
+
+		data, err := proto.Marshal(res)
+		if err != nil {
+			return err
+		}
+		return writeFrame(conn, data)
+
+	default:
+		cancel()
+		return nil
+	}
+}
+
 func (s *Server) Serve(port string) error {
-	lis, err := net.Listen("tcp", ":"+port)
+	addr := port
+	if addr == "" {
+		addr = s.Addr
+	}
+	lis, err := net.Listen("tcp", ":"+addr)
 	if err != nil {
 		return err
 	}

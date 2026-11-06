@@ -5,27 +5,22 @@ import (
 	pb "github.com/jsndz/bottle/rpc/proto"
 )
 
-func UnaryMessage(method string, payload []byte, headers map[string]string) (*pb.Message, error) {
-	message := pb.Message{
+func newMessage(frameType pb.FrameType, method string, payload []byte, headers map[string]string) *pb.Message {
+	return &pb.Message{
 		Id:      uuid.New().ID(),
-		Method:  method,
-		Type:    pb.FrameType_UNARY,
+		Type:    frameType,
 		Headers: headers,
+		Method:  method,
 		Payload: payload,
 	}
-	return &message, nil
+}
+
+func UnaryMessage(method string, payload []byte, headers map[string]string) (*pb.Message, error) {
+	return newMessage(pb.FrameType_UNARY, method, payload, headers), nil
 }
 
 func StreamRequestMessage(method string, payload []byte, headers map[string]string) (*pb.Message, error) {
-	message := pb.Message{
-		Id:      uuid.New().ID(),
-		Type:    pb.FrameType_STREAM_START,
-		Headers: headers,
-		Method:  method,
-		Payload: payload,
-	}
-
-	return &message, nil
+	return newMessage(pb.FrameType_STREAM_START, method, payload, headers), nil
 }
 
 func NewUnaryResponse(req *pb.Message, payload []byte, errStr string) *pb.Message {

@@ -15,7 +15,7 @@ func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 	if err := json.Unmarshal(msg.Payload, &joiningNode); err != nil {
 		return rpc.NewUnaryResponse(msg, nil, "Invalid Payload")
 	}
-	client := rpc.NewClient(joiningNode.Address, 1, c.Pool)
+	client := rpc.NewClient(joiningNode.Address, c.Pool)
 	_, err := client.Ping(ctx)
 	if err != nil {
 		return rpc.NewUnaryResponse(msg, nil, "Can't Connect")
@@ -32,29 +32,32 @@ func (c *Cluster) HandleJoin(ctx context.Context, msg *pb.Message) *pb.Message {
 
 func (c *Cluster) HandleUpdate(ctx context.Context, msg *pb.Message) *pb.Message {
 	var cls Cluster
-	json.Unmarshal(msg.Payload, &cls)
-	c.mu.Lock()
-	c.Nodes = cls.Nodes
-	c.mu.Unlock()
+	if err := json.Unmarshal(msg.Payload, &cls); err == nil && cls.Nodes != nil {
+		c.mu.Lock()
+		c.Nodes = cls.Nodes
+		c.mu.Unlock()
+	}
 	return rpc.NewUnaryResponse(msg, nil, "")
 }
 
 func (c *Cluster) HandleLeave(ctx context.Context, msg *pb.Message) *pb.Message {
 	var node Node
-	json.Unmarshal(msg.Payload, &node)
-	c.mu.Lock()
-	delete(c.Nodes, node.ID)
-	c.mu.Unlock()
+	if err := json.Unmarshal(msg.Payload, &node); err == nil && node.ID != "" {
+		c.mu.Lock()
+		delete(c.Nodes, node.ID)
+		c.mu.Unlock()
+	}
 	return rpc.NewUnaryResponse(msg, nil, "")
 }
+
 func (c *Cluster) HandleHeartBeat(ctx context.Context, msg *pb.Message) *pb.Message {
 	payload, _ := json.Marshal(c.Self)
-	c.Self.LastPing = time.Now()
 
 	var sender Node
 	if err := json.Unmarshal(msg.Payload, &sender); err == nil {
 		c.mu.Lock()
-		if peer, ok := c.Nodes[sender.ID]; ok {
+		c.Self.LastPing = time.Now()
+		if peer, ok := c.Nodes[sender.ID]; ok && peer != nil {
 			peer.LastPing = time.Now()
 			peer.MissedHeartbeats = 0
 			peer.State = ACTIVE

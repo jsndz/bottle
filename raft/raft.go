@@ -124,7 +124,7 @@ func (r *Raft) StartElection() error {
 		for _, peer := range peers {
 			r.SentLength[peer.ID] = len(r.Logs)
 			r.AckLength[peer.ID] = 0
-			go r.ReplicateLog(r.Cluster.Self.ID, peer.ID)
+			go r.ReplicateLog(peer.ID)
 		}
 		return nil
 	}
@@ -147,7 +147,7 @@ func (r *Raft) StartElection() error {
 
 	for _, peer := range peers {
 		go func(node *cluster.Node) {
-			client := rpc.NewClient(node.Address, 1, r.Cluster.Pool)
+			client := rpc.NewClient(node.Address, r.Cluster.Pool)
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 
@@ -186,7 +186,7 @@ func (r *Raft) StartElection() error {
 					for _, p := range peers {
 						r.SentLength[p.ID] = len(r.Logs)
 						r.AckLength[p.ID] = 0
-						go r.ReplicateLog(r.Cluster.Self.ID, p.ID)
+						go r.ReplicateLog(p.ID)
 					}
 				}
 			}
@@ -198,7 +198,10 @@ func (r *Raft) StartElection() error {
 
 func (r *Raft) Heartbeat() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	if r.Role != Leader {
+		r.mu.Unlock()
+		return nil
+	}
 	prevLogTerm, prevLogIndex := r.GetPrevLog()
 	req := &AppendEntriesReq{
 		Term:              r.Term,
@@ -207,33 +210,43 @@ func (r *Raft) Heartbeat() error {
 		PrevLogTerm:       prevLogTerm,
 		CurrentLeader:     r.CurrentLeader,
 	}
+	currentTerm := r.Term
+	r.mu.Unlock()
+
 	payload, _ := json.Marshal(req)
 	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.heartbeat", nil, payload)
 	for i := 0; i < numPeers; i++ {
-
 		data := <-ch
 		if data.Error != "" {
 			continue
 		}
 		var reply AppendEntriesRes
-		json.Unmarshal(data.Payload, &reply)
-		if reply.Term > r.Term {
-			r.convertToFollower(reply.Term, "")
-			return nil
+		if err := json.Unmarshal(data.Payload, &reply); err != nil {
+			continue
 		}
 
-		if !reply.Success {
-			// handling log mismatch
-			//FIND THE peer who has log mismatch
-			req.PrevLogIndex--
-			// r.Cluster.SendToNode(reply.FollowerID, "raft.heartbeat")
-			// send him th req again with the index--
+		r.mu.Lock()
+		if reply.Term > r.Term {
+			r.convertToFollower(reply.Term, "")
+			r.mu.Unlock()
+			return nil
 		}
+		if r.Role != Leader || r.Term != currentTerm {
+			r.mu.Unlock()
+			return nil
+		}
+		if !reply.Success {
+			if r.SentLength[reply.FollowerID] > 1 {
+				r.SentLength[reply.FollowerID]--
+			}
+			go r.ReplicateLog(reply.FollowerID)
+		}
+		r.mu.Unlock()
 	}
 	return nil
 }
 
-func (r *Raft) ReplicateLog(nodeId, followerId string) *pb.Message {
+func (r *Raft) ReplicateLog(followerId string) *pb.Message {
 	r.mu.Lock()
 	sentLen := r.SentLength[followerId]
 	if sentLen <= 0 {

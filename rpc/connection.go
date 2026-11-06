@@ -28,43 +28,45 @@ type ConnPool struct {
 
 func (c *ConnPool) Get() *Connection {
 	c.mu.Lock()
-	for _, conn := range c.Conns {
-		if !conn.Busy {
-			conn.Busy = true
-			c.mu.Unlock()
+	defer c.mu.Unlock()
+
+	for {
+		for _, conn := range c.Conns {
+			if !conn.Busy {
+				conn.Busy = true
+				conn.LastUsed = time.Now()
+				return conn
+			}
+		}
+		if len(c.Conns) < int(c.MaxConn) {
+			netConn, err := net.Dial("tcp", c.Addr)
+			if err != nil {
+				return nil
+			}
+			conn := &Connection{
+				ID:        uuid.NewString(),
+				Conn:      &netConn,
+				CreatedAt: time.Now(),
+				LastUsed:  time.Now(),
+				Busy:      true,
+			}
+			c.Conns[conn.ID] = conn
 			return conn
 		}
+		c.cond.Wait()
 	}
-	if int(c.MaxConn) > len(c.Conns) {
-		netConn, err := net.Dial("tcp", c.Addr)
-		if err != nil {
-
-		}
-		conn := Connection{
-			ID:        uuid.NewString(),
-			Conn:      &netConn,
-			CreatedAt: time.Now(),
-			Busy:      true,
-		}
-		c.Conns[conn.ID] = &conn
-		conn.Busy = true
-		c.mu.Unlock()
-
-		return &conn
-	}
-	c.cond.Wait()
-	return c.Get()
 }
 
-func (c *ConnPool) Release(addr, id string) {
+func (c *ConnPool) Release(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	connection := c.Conns[id]
-
-	connection.Busy = false
-	connection.LastUsed = time.Now()
-	c.cond.Signal()
+	if connection, ok := c.Conns[id]; ok && connection != nil {
+		connection.Busy = false
+		connection.LastUsed = time.Now()
+		c.cond.Signal()
+	}
 }
+
 func (c *ConnPool) PingTicker() {
 	ticker := time.NewTicker(time.Second * 30)
 
@@ -76,19 +78,19 @@ func (c *ConnPool) PingTicker() {
 }
 
 func (c *ConnPool) pingIdleConn() {
+	ping := &pb.Message{
+		Type: pb.FrameType_HEARTBEAT,
+	}
+	data, err := proto.Marshal(ping)
+	if err != nil {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, conn := range c.Conns {
-		if !conn.Busy {
-			ping := &pb.Message{
-				Id:   0,
-				Type: pb.FrameType_HEARTBEAT,
-			}
-			data, err := proto.Marshal(ping)
-			if err != nil {
-
-			}
+		if !conn.Busy && conn.Conn != nil && *conn.Conn != nil {
 			_ = writeFrame(*conn.Conn, data)
 		}
 	}
@@ -126,13 +128,15 @@ func (gp *GlobalPool) Get(addr string) *Connection {
 	}
 	gp.mu.Unlock()
 
-	conn := pool.Get()
-	return conn
+	return pool.Get()
 }
 
 func (gp *GlobalPool) Release(addr, id string) {
 	gp.mu.Lock()
-	defer gp.mu.Unlock()
-	pool, _ := gp.NetPool[addr]
-	pool.Release(addr, id)
+	pool := gp.NetPool[addr]
+	gp.mu.Unlock()
+
+	if pool != nil {
+		pool.Release(id)
+	}
 }
