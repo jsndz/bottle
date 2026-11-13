@@ -13,21 +13,25 @@ type Command struct {
 
 type KVStore struct {
 	mu        sync.RWMutex
-	data      map[string]string
+	Engine    *MVCCEngine
 	GlobalRev int64
 }
 
 func NewKVStore() *KVStore {
 	return &KVStore{
-		data: make(map[string]string),
+		Engine: NewMVCCEngine(),
 	}
 }
 
 func (kv *KVStore) Get(key string) (string, bool) {
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
-	val, ok := kv.data[key]
-	return val, ok
+
+	rec, ok := kv.Engine.Get(key)
+	if !ok {
+		return "", false
+	}
+	return string(rec.Value), true
 }
 
 func (kv *KVStore) Apply(data []byte) any {
@@ -39,17 +43,20 @@ func (kv *KVStore) Apply(data []byte) any {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	kv.GlobalRev++
 	switch cmd.Op {
 	case "PUT", "put", "SET", "set":
-		kv.data[cmd.Key] = cmd.Value
-
-		return cmd.Value
+		rev, rec := kv.Engine.Put(cmd.Key, []byte(cmd.Value))
+		kv.GlobalRev = rev
+		return string(rec.Value)
 	case "DELETE", "delete", "DEL", "del":
-		delete(kv.data, cmd.Key)
+		rev, _, ok := kv.Engine.Delete(cmd.Key)
+		if ok {
+			kv.GlobalRev = rev
+		}
 		return nil
 	default:
-		kv.data[cmd.Key] = cmd.Value
-		return cmd.Value
+		rev, rec := kv.Engine.Put(cmd.Key, []byte(cmd.Value))
+		kv.GlobalRev = rev
+		return string(rec.Value)
 	}
 }
