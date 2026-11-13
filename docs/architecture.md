@@ -28,7 +28,7 @@ Rather than relying on heavy third-party dependencies (like etcd or HashiCorp Ra
 │   │ Controller Runtime│◄─────────────►│ Event / Watch   │   │
 │   └───────────────────┘               └────────┬────────┘   │
 │                                                │            │
-└──────────────────────────────┬─────────────────┘____________|
+└──────────────────────────────┬─────────────────┘────────────┘
                                │ Replicated State             
                                ▼                              
 ┌─────────────────────────────────────────────────────────────┐
@@ -38,8 +38,8 @@ Rather than relying on heavy third-party dependencies (like etcd or HashiCorp Ra
 │   │ Distributed KV    │◄─────────────►│ Raft Consensus  │   │
 │   └───────────────────┘               └─────────────────┘   │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ Cluster State                │
-                               ▼                              │
+                               │ Cluster State                
+                               ▼                              
 ┌─────────────────────────────────────────────────────────────┐
 │                    Infrastructure Base                      │
 │                                                             │
@@ -47,8 +47,8 @@ Rather than relying on heavy third-party dependencies (like etcd or HashiCorp Ra
 │   │Cluster Membership │◄─────────────►│ Custom RPC      │   │
 │   └───────────────────┘               └─────────────────┘   │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ Execution                    │
-                               ▼                              │
+                               │ Execution                    
+                               ▼                              
 ┌─────────────────────────────────────────────────────────────┐
 │                  Worker Execution Nodes                     │
 │                                                             │

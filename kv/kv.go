@@ -12,8 +12,9 @@ type Command struct {
 }
 
 type KVStore struct {
-	mu   sync.RWMutex
-	data map[string]string
+	mu        sync.RWMutex
+	data      map[string]string
+	GlobalRev int64
 }
 
 func NewKVStore() *KVStore {
@@ -37,9 +38,12 @@ func (kv *KVStore) Apply(data []byte) any {
 
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+
+	kv.GlobalRev++
 	switch cmd.Op {
 	case "PUT", "put", "SET", "set":
 		kv.data[cmd.Key] = cmd.Value
+
 		return cmd.Value
 	case "DELETE", "delete", "DEL", "del":
 		delete(kv.data, cmd.Key)
