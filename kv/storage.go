@@ -22,16 +22,16 @@ func NewStorage() *Storage {
 	}
 }
 
-func formatRev(rev int64) string {
-	return fmt.Sprintf("%020d", rev)
+func formatRevKey(rev int64, key string) string {
+	return fmt.Sprintf("%020d/%s", rev, key)
 }
 
-func (s *Storage) Put(rev int64, rec *Record) {
-	s.tree.Put(formatRev(rev), rec)
+func (s *Storage) Put(rev int64, key string, rec *Record) {
+	s.tree.Put(formatRevKey(rev, key), rec)
 }
 
-func (s *Storage) Get(rev int64) (*Record, bool) {
-	val, ok := s.tree.Get(formatRev(rev))
+func (s *Storage) Get(rev int64, key string) (*Record, bool) {
+	val, ok := s.tree.Get(formatRevKey(rev, key))
 	if !ok {
 		return nil, false
 	}
@@ -40,11 +40,12 @@ func (s *Storage) Get(rev int64) (*Record, bool) {
 
 func (s *Storage) Range(startRev, endRev int64) []*Record {
 	var records []*Record
+	startKey := fmt.Sprintf("%020d/", startRev)
 	var endKey string
 	if endRev > 0 {
-		endKey = formatRev(endRev + 1)
+		endKey = fmt.Sprintf("%020d/", endRev+1)
 	}
-	s.tree.AscendRange(formatRev(startRev), endKey, func(k string, v any) bool {
+	s.tree.AscendRange(startKey, endKey, func(k string, v any) bool {
 		records = append(records, v.(*Record))
 		return true
 	})

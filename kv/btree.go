@@ -15,10 +15,8 @@ type bNode struct {
 	isLeaf bool
 	keys   []string
 
-	// Internal node fields
 	children []*bNode
 
-	// Leaf node fields
 	values []any
 	next   *bNode
 	prev   *bNode
@@ -26,7 +24,6 @@ type bNode struct {
 	parent *bNode
 }
 
-// BTree is an in-memory B+ Tree with string keys.
 type BTree struct {
 	mu    sync.RWMutex
 	root  *bNode
@@ -34,7 +31,6 @@ type BTree struct {
 	count int
 }
 
-// NewBTree creates a new B+ Tree with the specified degree/order.
 func NewBTree(order int) *BTree {
 	if order < minBTreeOrder {
 		order = defaultBTreeOrder
@@ -45,14 +41,12 @@ func NewBTree(order int) *BTree {
 	}
 }
 
-// Len returns the number of keys stored in the B+ Tree.
 func (t *BTree) Len() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.count
 }
 
-// Get searches for a key in the B+ Tree.
 func (t *BTree) Get(key string) (any, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -69,12 +63,10 @@ func (t *BTree) Get(key string) (any, bool) {
 	return nil, false
 }
 
-// Put inserts or updates a key-value pair in the B+ Tree.
 func (t *BTree) Put(key string, val any) {
 	t.Insert(key, val)
 }
 
-// Insert inserts or updates a key-value pair in the B+ Tree.
 func (t *BTree) Insert(key string, val any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -100,7 +92,6 @@ func (t *BTree) Insert(key string, val any) {
 	}
 }
 
-// Delete removes a key from the B+ Tree.
 func (t *BTree) Delete(key string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -136,7 +127,6 @@ func (t *BTree) Delete(key string) bool {
 	return true
 }
 
-// Ascend iterates over all keys in ascending order.
 func (t *BTree) Ascend(iterator func(key string, val any) bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -152,7 +142,6 @@ func (t *BTree) Ascend(iterator func(key string, val any) bool) {
 	}
 }
 
-// AscendRange iterates over keys in [startKey, endKey). If endKey is empty, iterates until the end.
 func (t *BTree) AscendRange(startKey, endKey string, iterator func(key string, val any) bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -178,7 +167,6 @@ func (t *BTree) AscendRange(startKey, endKey string, iterator func(key string, v
 	}
 }
 
-// AscendPrefix iterates over all keys starting with the given prefix.
 func (t *BTree) AscendPrefix(prefix string, iterator func(key string, val any) bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

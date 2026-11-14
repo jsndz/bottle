@@ -54,6 +54,17 @@ func (kv *KVStore) Apply(data []byte) any {
 			kv.GlobalRev = rev
 		}
 		return nil
+	case "TXN", "txn":
+		raw := cmd.Key
+		if raw == "" {
+			raw = cmd.Value
+		}
+		txn := NewTransaction(raw)
+		res := kv.Engine.Txn(&txn)
+		if res != nil && res.Success && res.Rev > 0 {
+			kv.GlobalRev = res.Rev
+		}
+		return res
 	default:
 		rev, rec := kv.Engine.Put(cmd.Key, []byte(cmd.Value))
 		kv.GlobalRev = rev

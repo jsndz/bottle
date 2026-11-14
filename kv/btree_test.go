@@ -8,7 +8,6 @@ import (
 func TestBTreeBasic(t *testing.T) {
 	tree := NewBTree(4)
 
-	// Test Insert and Get
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("key-%03d", i)
 		tree.Put(key, i)
@@ -26,14 +25,12 @@ func TestBTreeBasic(t *testing.T) {
 		}
 	}
 
-	// Update existing key
 	tree.Put("key-050", 999)
 	val, ok := tree.Get("key-050")
 	if !ok || val != 999 {
 		t.Fatalf("expected 999 for key-050, got %v", val)
 	}
 
-	// Non-existent key
 	_, ok = tree.Get("nonexistent")
 	if ok {
 		t.Fatalf("expected nonexistent to return false")
@@ -49,7 +46,6 @@ func TestBTreePrefixAndRange(t *testing.T) {
 	tree.Put("/nodes/node-1", "node1")
 	tree.Put("/services/web", "svc1")
 
-	// AscendPrefix
 	var pods []string
 	tree.AscendPrefix("/pods/", func(key string, val any) bool {
 		pods = append(pods, key)
@@ -63,14 +59,12 @@ func TestBTreePrefixAndRange(t *testing.T) {
 		t.Fatalf("unexpected pods order: %v", pods)
 	}
 
-	// AscendRange
 	var rangeKeys []string
 	tree.AscendRange("/pods/nginx-2", "/services/web", func(key string, val any) bool {
 		rangeKeys = append(rangeKeys, key)
 		return true
 	})
 
-	// Expected: /pods/nginx-2, /pods/redis
 	if len(rangeKeys) != 2 || rangeKeys[0] != "/pods/nginx-2" || rangeKeys[1] != "/pods/redis" {
 		t.Fatalf("unexpected range keys: %v", rangeKeys)
 	}
@@ -83,7 +77,6 @@ func TestBTreeDelete(t *testing.T) {
 		tree.Put(fmt.Sprintf("k-%02d", i), i)
 	}
 
-	// Delete even keys
 	for i := 0; i < 50; i += 2 {
 		deleted := tree.Delete(fmt.Sprintf("k-%02d", i))
 		if !deleted {
@@ -95,7 +88,6 @@ func TestBTreeDelete(t *testing.T) {
 		t.Fatalf("expected 25 items left, got %d", tree.Len())
 	}
 
-	// Verify remaining keys
 	for i := 1; i < 50; i += 2 {
 		val, ok := tree.Get(fmt.Sprintf("k-%02d", i))
 		if !ok || val != i {
