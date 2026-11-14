@@ -3,9 +3,7 @@ package raft
 import (
 	"context"
 	"encoding/json"
-	"time"
 
-	"github.com/jsndz/bottle/cluster"
 	"github.com/jsndz/bottle/rpc"
 	pb "github.com/jsndz/bottle/rpc/proto"
 )
@@ -44,79 +42,40 @@ func (r *Raft) HandleElection(ctx context.Context, msg *pb.Message) *pb.Message 
 	return rpc.NewUnaryResponse(msg, payload, "")
 }
 
-func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Message {
+func (r *Raft) HandlePropose(ctx context.Context, msg *pb.Message) *pb.Message {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	isLeader := (r.Role == Leader)
+	leaderID := r.CurrentLeader
+	r.mu.Unlock()
 
-	if r.CurrentLeader != r.Cluster.Self.ID {
-		leader := r.Cluster.Nodes[r.CurrentLeader]
-		if r.CurrentLeader == "" {
+	if !isLeader {
+		if leaderID == "" {
 			return rpc.NewUnaryResponse(msg, nil, "no leader currently elected")
 		}
+		leader, ok := r.Cluster.Nodes[leaderID]
+		if !ok {
+			return rpc.NewUnaryResponse(msg, nil, "leader address unknown")
+		}
 		client := rpc.NewClient(leader.Address, r.Cluster.Pool)
-		reply, err := client.Call(context.Background(), msg.Method, msg.Payload, msg.Headers)
+		reply, err := client.Call(ctx, msg.Method, msg.Payload, msg.Headers)
 		if err != nil {
 			return rpc.NewUnaryResponse(msg, nil, err.Error())
 		}
 		return reply
 	}
 
-	_, prevLogIndex := r.GetPrevLog()
-	log := Log{
-		Term:    r.Term,
-		Command: msg.Payload,
-		Index:   prevLogIndex + 1,
-	}
-	// add the log to the raft logs
-	r.Logs = append(r.Logs, log)
-	r.AckLength[r.Cluster.Self.ID] = len(r.Logs)
-
-	peers := r.Cluster.Peers()
-	numPeers := len(peers)
-
-	// Single node cluster
-	if numPeers == 0 {
-		r.CommitLogEntries()
-		resp := rpc.NewUnaryResponse(msg, nil, "")
-		resp.Method = "raft.appended"
-		return resp
+	err := r.Propose(msg.Payload)
+	if err != nil {
+		return rpc.NewUnaryResponse(msg, nil, err.Error())
 	}
 
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	ch := make(chan *pb.Message, numPeers)
-	for _, peer := range peers {
-		go func(node *cluster.Node) {
-			ch <- r.ReplicateLog(node.ID)
-		}(peer)
-	}
+	resp := rpc.NewUnaryResponse(msg, nil, "")
+	resp.Method = msg.Method
+	return resp
+}
 
-	for i := 0; i < numPeers; i++ {
-		select {
-		case resMsg := <-ch:
-			var res AppendEntriesRes
-			_ = json.Unmarshal(resMsg.Payload, &res)
-			if r.Term == res.Term && r.AckLength[res.FollowerID] <= res.Ack {
-				r.SentLength[res.FollowerID] = res.Ack
-				r.AckLength[res.FollowerID] = res.Ack
-				r.CommitLogEntries()
-			} else if r.SentLength[res.FollowerID] > 0 {
-				r.SentLength[res.FollowerID] -= 1
-				r.ReplicateLog(res.FollowerID)
-			} else if r.Term < res.Term {
-				r.convertToFollower(res.Term, "")
-			}
-		case <-ctxTimeout.Done():
-			break
-		}
-	}
-
-	if r.CommitIndex >= log.Index {
-		resp := rpc.NewUnaryResponse(msg, nil, "")
-		resp.Method = "raft.appended"
-		return resp
-	}
-	return rpc.NewUnaryResponse(msg, nil, "failed to reach quorum consensus")
+func (r *Raft) HandleClientCommand(ctx context.Context, msg *pb.Message) *pb.Message {
+	return r.HandlePropose(ctx, msg)
 }
 
 func (r *Raft) HandleAppend(ctx context.Context, msg *pb.Message) *pb.Message {
@@ -165,4 +124,5 @@ func (r *Raft) RegisterHandlers(rpcServer *rpc.Server) {
 	rpcServer.Handler.AddHandler("raft.client.command", r.HandleClientCommand, nil)
 	rpcServer.Handler.AddHandler("raft.logs", r.HandleAppend, nil)
 	rpcServer.Handler.AddHandler("raft.heartbeat", r.HandleHeartbeat, nil)
+	rpcServer.Handler.AddHandler("raft.propose", r.HandlePropose, nil)
 }

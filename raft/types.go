@@ -42,3 +42,7 @@ type AppendEntriesRes struct {
 	FollowerID string `json:"follower_id"`
 	Ack        int    `json:"ack"`
 }
+
+type ProposeRes struct {
+	Success bool `json:"success"`
+}

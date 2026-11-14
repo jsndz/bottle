@@ -3,6 +3,8 @@ package raft
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -116,7 +118,6 @@ func (r *Raft) StartElection() error {
 	peers := r.Cluster.Peers()
 	majority := r.Cluster.QuorumSize()
 
-	// Single-node cluster case
 	if len(r.VoteReceived) >= majority {
 		r.Role = Leader
 		r.CurrentLeader = r.Cluster.Self.ID
@@ -164,12 +165,10 @@ func (r *Raft) StartElection() error {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 
-			// Ignore if state changed or term moved forward
 			if r.Role != Candidate || r.Term != currentTerm {
 				return
 			}
 
-			// Step down if peer has higher term
 			if res.Term > r.Term {
 				r.convertToFollower(res.Term, "")
 				return
@@ -177,12 +176,10 @@ func (r *Raft) StartElection() error {
 
 			if res.Granted {
 				r.VoteReceived = append(r.VoteReceived, res.VoterId)
-				// Check majority
 				if len(r.VoteReceived) >= majority {
 					r.Role = Leader
 					r.CurrentLeader = r.Cluster.Self.ID
 
-					// Trigger log replication immediately upon becoming leader
 					for _, p := range peers {
 						r.SentLength[p.ID] = len(r.Logs)
 						r.AckLength[p.ID] = 0
@@ -284,14 +281,13 @@ func (r *Raft) CommitLogEntries() {
 	peers := r.Cluster.Peers()
 	majority := r.Cluster.QuorumSize()
 	for r.CommitIndex < len(r.Logs) {
-		ack := 1 // Count the leader itself
+		ack := 1
 		for _, node := range peers {
 			if r.AckLength[node.ID] > r.CommitIndex {
 				ack += 1
 			}
 		}
 		if ack >= majority {
-			// commit the log
 			r.CommitIndex += 1
 			if r.FSM != nil {
 				r.FSM.Apply(r.Logs[r.CommitIndex-1].Command)
@@ -300,4 +296,108 @@ func (r *Raft) CommitLogEntries() {
 			break
 		}
 	}
+}
+
+func (r *Raft) Propose(command []byte) error {
+	r.mu.Lock()
+	if r.Role != Leader {
+		leader := r.CurrentLeader
+		r.mu.Unlock()
+		if leader != "" {
+			return fmt.Errorf("not leader; leader is %s", leader)
+		}
+		return errors.New("not leader; no leader currently elected")
+	}
+
+	_, prevLogIndex := r.GetPrevLog()
+	entryIndex := prevLogIndex + 1
+	log := Log{
+		Term:    r.Term,
+		Command: command,
+		Index:   entryIndex,
+	}
+	r.Logs = append(r.Logs, log)
+	r.AckLength[r.Cluster.Self.ID] = len(r.Logs)
+	currentTerm := r.Term
+
+	peers := r.Cluster.Peers()
+	numPeers := len(peers)
+
+	if numPeers == 0 {
+		r.CommitLogEntries()
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
+
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	ch := make(chan *pb.Message, numPeers)
+	for _, peer := range peers {
+		go func(node *cluster.Node) {
+			ch <- r.ReplicateLog(node.ID)
+		}(peer)
+	}
+
+	for i := 0; i < numPeers; i++ {
+		select {
+		case resMsg := <-ch:
+			if resMsg == nil || resMsg.Error != "" {
+				continue
+			}
+			var res AppendEntriesRes
+			if err := json.Unmarshal(resMsg.Payload, &res); err != nil {
+				continue
+			}
+
+			r.mu.Lock()
+			if res.Term > r.Term {
+				r.convertToFollower(res.Term, "")
+				r.mu.Unlock()
+				return errors.New("stepped down: higher term observed")
+			}
+			if r.Role != Leader || r.Term != currentTerm {
+				r.mu.Unlock()
+				return errors.New("leadership lost during replication")
+			}
+
+			if res.Success {
+				if res.Ack >= r.AckLength[res.FollowerID] {
+					r.SentLength[res.FollowerID] = res.Ack
+					r.AckLength[res.FollowerID] = res.Ack
+					r.CommitLogEntries()
+				}
+			} else {
+				if r.SentLength[res.FollowerID] > 1 {
+					r.SentLength[res.FollowerID]--
+				}
+				go r.ReplicateLog(res.FollowerID)
+			}
+
+			if r.CommitIndex >= entryIndex {
+				r.mu.Unlock()
+				return nil
+			}
+			r.mu.Unlock()
+
+		case <-ctxTimeout.Done():
+			r.mu.Lock()
+			committed := r.CommitIndex >= entryIndex
+			r.mu.Unlock()
+			if committed {
+				return nil
+			}
+			return errors.New("failed to reach quorum consensus: timeout")
+		}
+	}
+
+	r.mu.Lock()
+	committed := r.CommitIndex >= entryIndex
+	r.mu.Unlock()
+
+	if committed {
+		return nil
+	}
+	return errors.New("failed to reach quorum consensus")
 }
