@@ -1,16 +1,10 @@
 package raft
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/jsndz/bottle/cluster"
-	"github.com/jsndz/bottle/rpc"
-	pb "github.com/jsndz/bottle/rpc/proto"
 )
 
 type Raft struct {
@@ -47,28 +41,6 @@ func NewRaft(cluster *cluster.Cluster) *Raft {
 	}
 }
 
-func (r *Raft) AppendLog(suffix []Log, prevLogIndex, leaderCommit int) {
-	for i, entry := range suffix {
-		idx := prevLogIndex + 1 + i
-		if idx <= len(r.Logs) {
-			if r.Logs[idx-1].Term != entry.Term {
-				r.Logs = r.Logs[:idx-1]
-				r.Logs = append(r.Logs, entry)
-			}
-		} else {
-			r.Logs = append(r.Logs, entry)
-		}
-	}
-	if leaderCommit > r.CommitIndex {
-		for i := r.CommitIndex; i < leaderCommit && i < len(r.Logs); i++ {
-			if r.FSM != nil {
-				r.FSM.Apply(r.Logs[i].Command)
-			}
-		}
-		r.CommitIndex = min(leaderCommit, len(r.Logs))
-	}
-}
-
 func (r *Raft) HeartbeatTicker() {
 	go func() {
 		for range r.Ticker.C {
@@ -96,308 +68,21 @@ func (r *Raft) convertToFollower(term int, leaderID string) {
 	}
 }
 
+func (r *Raft) becomeLeader() {
+	r.Role = Leader
+	r.CurrentLeader = r.Cluster.Self.ID
+	peers := r.Cluster.Peers()
+	for _, p := range peers {
+		r.SentLength[p.ID] = len(r.Logs)
+		r.AckLength[p.ID] = 0
+		go r.ReplicateLog(p.ID)
+	}
+}
+
 func (r *Raft) GetPrevLog() (int, int) {
 	if len(r.Logs) > 0 {
 		prevLog := r.Logs[len(r.Logs)-1]
 		return prevLog.Term, prevLog.Index
 	}
 	return 0, 0
-}
-
-func (r *Raft) StartElection() error {
-	r.mu.Lock()
-	r.Term++
-	r.Role = Candidate
-	r.VotedFor = r.Cluster.Self.ID
-	r.VoteReceived = []string{r.VotedFor}
-	currentTerm := r.Term
-	if r.Ticker != nil {
-		r.Ticker.Reset(RandomElectionTimeout())
-	}
-
-	peers := r.Cluster.Peers()
-	majority := r.Cluster.QuorumSize()
-
-	if len(r.VoteReceived) >= majority {
-		r.Role = Leader
-		r.CurrentLeader = r.Cluster.Self.ID
-		r.mu.Unlock()
-		for _, peer := range peers {
-			r.SentLength[peer.ID] = len(r.Logs)
-			r.AckLength[peer.ID] = 0
-			go r.ReplicateLog(peer.ID)
-		}
-		return nil
-	}
-
-	lastLogTerm, lastLogIndex := r.GetPrevLog()
-
-	req := VoteRequest{
-		Term:         currentTerm,
-		LastLogIndex: lastLogIndex,
-		LastLogTerm:  lastLogTerm,
-		CandidateId:  r.Cluster.Self.ID,
-	}
-
-	payload, err := json.Marshal(req)
-	if err != nil {
-		r.mu.Unlock()
-		return err
-	}
-	r.mu.Unlock()
-
-	for _, peer := range peers {
-		go func(node *cluster.Node) {
-			client := rpc.NewClient(node.Address, r.Cluster.Pool)
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-
-			reply, err := client.Call(ctx, "raft.election", payload, nil)
-			if err != nil || reply.Error != "" {
-				return
-			}
-
-			var res VoteResponse
-			if err := json.Unmarshal(reply.Payload, &res); err != nil {
-				return
-			}
-
-			r.mu.Lock()
-			defer r.mu.Unlock()
-
-			if r.Role != Candidate || r.Term != currentTerm {
-				return
-			}
-
-			if res.Term > r.Term {
-				r.convertToFollower(res.Term, "")
-				return
-			}
-
-			if res.Granted {
-				r.VoteReceived = append(r.VoteReceived, res.VoterId)
-				if len(r.VoteReceived) >= majority {
-					r.Role = Leader
-					r.CurrentLeader = r.Cluster.Self.ID
-
-					for _, p := range peers {
-						r.SentLength[p.ID] = len(r.Logs)
-						r.AckLength[p.ID] = 0
-						go r.ReplicateLog(p.ID)
-					}
-				}
-			}
-		}(peer)
-	}
-
-	return nil
-}
-
-func (r *Raft) Heartbeat() error {
-	r.mu.Lock()
-	if r.Role != Leader {
-		r.mu.Unlock()
-		return nil
-	}
-	prevLogTerm, prevLogIndex := r.GetPrevLog()
-	req := &AppendEntriesReq{
-		Term:              r.Term,
-		LeaderCommitIndex: r.CommitIndex,
-		PrevLogIndex:      prevLogIndex,
-		PrevLogTerm:       prevLogTerm,
-		CurrentLeader:     r.CurrentLeader,
-	}
-	currentTerm := r.Term
-	r.mu.Unlock()
-
-	payload, _ := json.Marshal(req)
-	ch, numPeers := r.Cluster.BroadcastWithChannel("raft.heartbeat", nil, payload)
-	for i := 0; i < numPeers; i++ {
-		data := <-ch
-		if data.Error != "" {
-			continue
-		}
-		var reply AppendEntriesRes
-		if err := json.Unmarshal(data.Payload, &reply); err != nil {
-			continue
-		}
-
-		r.mu.Lock()
-		if reply.Term > r.Term {
-			r.convertToFollower(reply.Term, "")
-			r.mu.Unlock()
-			return nil
-		}
-		if r.Role != Leader || r.Term != currentTerm {
-			r.mu.Unlock()
-			return nil
-		}
-		if !reply.Success {
-			if r.SentLength[reply.FollowerID] > 1 {
-				r.SentLength[reply.FollowerID]--
-			}
-			go r.ReplicateLog(reply.FollowerID)
-		}
-		r.mu.Unlock()
-	}
-	return nil
-}
-
-func (r *Raft) ReplicateLog(followerId string) *pb.Message {
-	r.mu.Lock()
-	sentLen := r.SentLength[followerId]
-	if sentLen <= 0 {
-		sentLen = 1
-	}
-	prevLogIndex := sentLen - 1
-	prevLogTerm := 0
-	if prevLogIndex > 0 && prevLogIndex <= len(r.Logs) {
-		prevLogTerm = r.Logs[prevLogIndex-1].Term
-	}
-
-	suffix := make([]Log, 0)
-	if prevLogIndex < len(r.Logs) {
-		suffix = append(suffix, r.Logs[prevLogIndex:]...)
-	}
-
-	AppendEntriesReq := &AppendEntriesReq{
-		Term:              r.Term,
-		LeaderCommitIndex: r.CommitIndex,
-		PrevLogIndex:      prevLogIndex,
-		PrevLogTerm:       prevLogTerm,
-		CurrentLeader:     r.CurrentLeader,
-		Logs:              suffix,
-	}
-	payload, err := json.Marshal(AppendEntriesReq)
-	r.mu.Unlock()
-
-	if err != nil {
-		return &pb.Message{Error: err.Error()}
-	}
-	return r.Cluster.SendToNode(followerId, "raft.logs", payload, nil)
-}
-
-func (r *Raft) CommitLogEntries() {
-	peers := r.Cluster.Peers()
-	majority := r.Cluster.QuorumSize()
-	for r.CommitIndex < len(r.Logs) {
-		ack := 1
-		for _, node := range peers {
-			if r.AckLength[node.ID] > r.CommitIndex {
-				ack += 1
-			}
-		}
-		if ack >= majority {
-			r.CommitIndex += 1
-			if r.FSM != nil {
-				r.FSM.Apply(r.Logs[r.CommitIndex-1].Command)
-			}
-		} else {
-			break
-		}
-	}
-}
-
-func (r *Raft) Propose(command []byte) error {
-	r.mu.Lock()
-	if r.Role != Leader {
-		leader := r.CurrentLeader
-		r.mu.Unlock()
-		if leader != "" {
-			return fmt.Errorf("not leader; leader is %s", leader)
-		}
-		return errors.New("not leader; no leader currently elected")
-	}
-
-	_, prevLogIndex := r.GetPrevLog()
-	entryIndex := prevLogIndex + 1
-	log := Log{
-		Term:    r.Term,
-		Command: command,
-		Index:   entryIndex,
-	}
-	r.Logs = append(r.Logs, log)
-	r.AckLength[r.Cluster.Self.ID] = len(r.Logs)
-	currentTerm := r.Term
-
-	peers := r.Cluster.Peers()
-	numPeers := len(peers)
-
-	if numPeers == 0 {
-		r.CommitLogEntries()
-		r.mu.Unlock()
-		return nil
-	}
-	r.mu.Unlock()
-
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	ch := make(chan *pb.Message, numPeers)
-	for _, peer := range peers {
-		go func(node *cluster.Node) {
-			ch <- r.ReplicateLog(node.ID)
-		}(peer)
-	}
-
-	for i := 0; i < numPeers; i++ {
-		select {
-		case resMsg := <-ch:
-			if resMsg == nil || resMsg.Error != "" {
-				continue
-			}
-			var res AppendEntriesRes
-			if err := json.Unmarshal(resMsg.Payload, &res); err != nil {
-				continue
-			}
-
-			r.mu.Lock()
-			if res.Term > r.Term {
-				r.convertToFollower(res.Term, "")
-				r.mu.Unlock()
-				return errors.New("stepped down: higher term observed")
-			}
-			if r.Role != Leader || r.Term != currentTerm {
-				r.mu.Unlock()
-				return errors.New("leadership lost during replication")
-			}
-
-			if res.Success {
-				if res.Ack >= r.AckLength[res.FollowerID] {
-					r.SentLength[res.FollowerID] = res.Ack
-					r.AckLength[res.FollowerID] = res.Ack
-					r.CommitLogEntries()
-				}
-			} else {
-				if r.SentLength[res.FollowerID] > 1 {
-					r.SentLength[res.FollowerID]--
-				}
-				go r.ReplicateLog(res.FollowerID)
-			}
-
-			if r.CommitIndex >= entryIndex {
-				r.mu.Unlock()
-				return nil
-			}
-			r.mu.Unlock()
-
-		case <-ctxTimeout.Done():
-			r.mu.Lock()
-			committed := r.CommitIndex >= entryIndex
-			r.mu.Unlock()
-			if committed {
-				return nil
-			}
-			return errors.New("failed to reach quorum consensus: timeout")
-		}
-	}
-
-	r.mu.Lock()
-	committed := r.CommitIndex >= entryIndex
-	r.mu.Unlock()
-
-	if committed {
-		return nil
-	}
-	return errors.New("failed to reach quorum consensus")
 }
