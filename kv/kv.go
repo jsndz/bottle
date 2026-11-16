@@ -3,6 +3,8 @@ package kv
 import (
 	"encoding/json"
 	"sync"
+
+	"github.com/jsndz/bottle/watch"
 )
 
 type Command struct {
@@ -11,16 +13,26 @@ type Command struct {
 	Value string `json:"value"`
 }
 
+type EventCallback func(e watch.Event)
+
 type KVStore struct {
 	mu        sync.RWMutex
 	Engine    *MVCCEngine
 	GlobalRev int64
+	onEvent   EventCallback
 }
 
 func NewKVStore() *KVStore {
 	return &KVStore{
-		Engine: NewMVCCEngine(),
+		Engine:    NewMVCCEngine(),
+		GlobalRev: 0,
 	}
+}
+
+func (kv *KVStore) SetEventCallback(e EventCallback) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.onEvent = e
 }
 
 func (kv *KVStore) Get(key string) (string, bool) {
@@ -45,13 +57,30 @@ func (kv *KVStore) Apply(data []byte) any {
 
 	switch cmd.Op {
 	case "PUT", "put", "SET", "set":
-		rev, rec := kv.Engine.Put(cmd.Key, []byte(cmd.Value))
+		val := []byte(cmd.Value)
+		var prevVal []byte
+		if prevRec, ok := kv.Engine.Get(cmd.Key); ok {
+			prevVal = prevRec.Value
+		}
+		rev, rec := kv.Engine.Put(cmd.Key, val)
 		kv.GlobalRev = rev
+		if kv.onEvent != nil {
+			event := watch.NewEvent(watch.PUT, cmd.Key, val, prevVal, rev)
+			kv.onEvent(event)
+		}
 		return string(rec.Value)
 	case "DELETE", "delete", "DEL", "del":
-		rev, _, ok := kv.Engine.Delete(cmd.Key)
+		rev, prev, ok := kv.Engine.Delete(cmd.Key)
 		if ok {
 			kv.GlobalRev = rev
+			if kv.onEvent != nil {
+				var prevVal []byte
+				if prev != nil {
+					prevVal = prev.Value
+				}
+				event := watch.NewEvent(watch.DELETE, cmd.Key, nil, prevVal, rev)
+				kv.onEvent(event)
+			}
 		}
 		return nil
 	case "TXN", "txn":
@@ -64,10 +93,24 @@ func (kv *KVStore) Apply(data []byte) any {
 		if res != nil && res.Success && res.Rev > 0 {
 			kv.GlobalRev = res.Rev
 		}
+		if kv.onEvent != nil && res != nil {
+			for _, ev := range res.Events {
+				kv.onEvent(ev)
+			}
+		}
 		return res
 	default:
-		rev, rec := kv.Engine.Put(cmd.Key, []byte(cmd.Value))
+		val := []byte(cmd.Value)
+		var prevVal []byte
+		if prevRec, ok := kv.Engine.Get(cmd.Key); ok {
+			prevVal = prevRec.Value
+		}
+		rev, rec := kv.Engine.Put(cmd.Key, val)
 		kv.GlobalRev = rev
+		if kv.onEvent != nil {
+			event := watch.NewEvent(watch.PUT, cmd.Key, val, prevVal, rev)
+			kv.onEvent(event)
+		}
 		return string(rec.Value)
 	}
 }

@@ -3,6 +3,8 @@ package kv
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/jsndz/bottle/watch"
 )
 
 const (
@@ -39,6 +41,7 @@ type TxnResponse struct {
 	Success   bool
 	Rev       int64
 	Responses []OpResult
+	Events    []watch.Event
 }
 
 func NewTransaction(raw ...string) Txn {
@@ -197,15 +200,27 @@ func (e *MVCCEngine) Txn(txn *Txn) *TxnResponse {
 	}
 
 	responses := make([]OpResult, 0, len(ops))
+	events := make([]watch.Event, 0, len(ops))
 	for _, op := range ops {
 		switch op.Type {
 		case "PUT", "put", "SET", "set":
+			prevRec := e.getInternal(op.Key)
+			var prevVal []byte
+			if prevRec != nil {
+				prevVal = prevRec.Value
+			}
 			rec := e.putInternal(op.Key, op.Value, commitRev)
 			responses = append(responses, OpResult{Key: op.Key, Record: rec})
+			events = append(events, watch.NewEvent(watch.PUT, op.Key, op.Value, prevVal, commitRev))
 		case "DELETE", "delete", "DEL", "del":
 			prev, ok := e.deleteInternal(op.Key, commitRev)
 			if ok {
+				var prevVal []byte
+				if prev != nil {
+					prevVal = prev.Value
+				}
 				responses = append(responses, OpResult{Key: op.Key, Record: prev})
+				events = append(events, watch.NewEvent(watch.DELETE, op.Key, nil, prevVal, commitRev))
 			} else {
 				responses = append(responses, OpResult{Key: op.Key, Record: nil})
 			}
@@ -219,5 +234,6 @@ func (e *MVCCEngine) Txn(txn *Txn) *TxnResponse {
 		Success:   success,
 		Rev:       commitRev,
 		Responses: responses,
+		Events:    events,
 	}
 }
