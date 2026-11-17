@@ -35,15 +35,21 @@ func (kv *KVStore) SetEventCallback(e EventCallback) {
 	kv.onEvent = e
 }
 
-func (kv *KVStore) Get(key string) (string, bool) {
+func (kv *KVStore) Get(key string) (*Record, bool) {
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
 
 	rec, ok := kv.Engine.Get(key)
 	if !ok {
-		return "", false
+		return nil, false
 	}
-	return string(rec.Value), true
+	return rec, true
+}
+
+func (kv *KVStore) GetPrefix(prefix string) []*Record {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+	return kv.Engine.GetPrefix(prefix)
 }
 
 func (kv *KVStore) Apply(data []byte) any {

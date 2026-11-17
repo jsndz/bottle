@@ -17,8 +17,8 @@ func TestKVStoreApplyAndGet(t *testing.T) {
 	store.Apply(putCmd)
 
 	val, ok := store.Get("hello")
-	if !ok || val != "world" {
-		t.Fatalf("expected world, got %q (ok=%v)", val, ok)
+	if !ok || string(val.Value) != "world" {
+		t.Fatalf("expected world, got %v (ok=%v)", val, ok)
 	}
 
 	delCmd, _ := json.Marshal(Command{Op: "DELETE", Key: "hello"})

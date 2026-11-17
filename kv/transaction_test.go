@@ -137,7 +137,7 @@ func TestKVStoreApplyTxn(t *testing.T) {
 	}
 
 	val, ok := store.Get("count")
-	if !ok || val != "11" {
-		t.Fatalf("expected count=11, got %s (ok=%v)", val, ok)
+	if !ok || string(val.Value) != "11" {
+		t.Fatalf("expected count=11, got %v (ok=%v)", val, ok)
 	}
 }
