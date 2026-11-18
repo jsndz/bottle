@@ -120,6 +120,10 @@ func (s *Server) Serve(port string) error {
 	if err != nil {
 		return err
 	}
+	return s.ServeListener(lis)
+}
+
+func (s *Server) ServeListener(lis net.Listener) error {
 	defer lis.Close()
 	for {
 		conn, err := lis.Accept()

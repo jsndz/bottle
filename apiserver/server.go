@@ -38,6 +38,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/namespaces/{ns}/pods", s.handleListOrWatchPods)
 	mux.HandleFunc("PUT /api/v1/namespaces/{ns}/pods/{name}", s.handleUpdatePod)
 	mux.HandleFunc("DELETE /api/v1/namespaces/{ns}/pods/{name}", s.handleDeletePod)
+	mux.HandleFunc("POST /api/v1/namespaces/{ns}/pods/{name}/binding", s.handleBindPod)
 
 	mux.HandleFunc("POST /api/v1/nodes", s.handleCreateNode)
 	mux.HandleFunc("GET /api/v1/nodes/{name}", s.handleGetNode)
@@ -52,4 +53,12 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+func (s *Server) Pods() *PodRegistry {
+	return s.pods
+}
+
+func (s *Server) Nodes() *NodeRegistry {
+	return s.nodes
 }

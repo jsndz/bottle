@@ -110,3 +110,36 @@ type NodeList struct {
 	Metadata ListMeta `json:"metadata"`
 	Items    []Node   `json:"items"`
 }
+
+type Binding struct {
+	TypeMeta        TypeMeta `json:"typeMeta,omitempty"`
+	Metadata        Metadata `json:"metadata,omitempty"`
+	Namespace       string   `json:"namespace"`
+	Name            string   `json:"name"`
+	NodeName        string   `json:"nodeName"`
+	ResourceVersion int64    `json:"resourceVersion,omitempty"`
+}
+
+func (b *Binding) GetNamespace() string {
+	if b.Namespace != "" {
+		return b.Namespace
+	}
+	if b.Metadata.Namespace != "" {
+		return b.Metadata.Namespace
+	}
+	return "default"
+}
+
+func (b *Binding) GetName() string {
+	if b.Name != "" {
+		return b.Name
+	}
+	return b.Metadata.Name
+}
+
+func (b *Binding) GetResourceVersion() int64 {
+	if b.ResourceVersion != 0 {
+		return b.ResourceVersion
+	}
+	return b.Metadata.ResourceVersion
+}

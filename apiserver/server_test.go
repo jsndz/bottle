@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/jsndz/bottle/kv"
+	"github.com/jsndz/bottle/rpc"
 	"github.com/jsndz/bottle/watch"
 )
 
@@ -240,5 +242,98 @@ func TestHTTPServerWatchStreaming(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for watch event")
+	}
+}
+
+func TestHTTPServerBindPod(t *testing.T) {
+	_, ts, _, _ := setupTestServer(t)
+	defer ts.Close()
+
+	pod := Pod{
+		Metadata: Metadata{Name: "bind-pod"},
+		Spec:     PodSpec{Containers: []Container{{Name: "c1", Image: "img"}}},
+	}
+	body, _ := json.Marshal(pod)
+	createResp, err := http.Post(ts.URL+"/api/v1/namespaces/default/pods", "application/json", bytes.NewReader(body))
+	if err != nil || createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("failed create: %v", err)
+	}
+	createResp.Body.Close()
+
+	binding := Binding{
+		NodeName: "node-1",
+	}
+	bBytes, _ := json.Marshal(binding)
+	bindResp, err := http.Post(ts.URL+"/api/v1/namespaces/default/pods/bind-pod/binding", "application/json", bytes.NewReader(bBytes))
+	if err != nil || bindResp.StatusCode != http.StatusOK {
+		t.Fatalf("failed bind: %v, status: %d", err, bindResp.StatusCode)
+	}
+	var bound Pod
+	_ = json.NewDecoder(bindResp.Body).Decode(&bound)
+	bindResp.Body.Close()
+
+	if bound.Spec.NodeName != "node-1" {
+		t.Fatalf("expected node-1, got %s", bound.Spec.NodeName)
+	}
+}
+
+func TestRPCServerBindPod(t *testing.T) {
+	s, _, _, _ := setupTestServer(t)
+
+	rpcServer := rpc.NewServer("0")
+	s.RegisterRPC(rpcServer)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	defer lis.Close()
+
+	go rpcServer.ServeListener(lis)
+
+	pool := rpc.NewGlobalPool()
+	client := rpc.NewClient(lis.Addr().String(), pool)
+
+	pod := Pod{
+		Metadata: Metadata{Name: "rpc-pod", Namespace: "default"},
+		Spec:     PodSpec{Containers: []Container{{Name: "c1", Image: "img"}}},
+	}
+	_, err = s.pods.Create(&pod)
+	if err != nil {
+		t.Fatalf("failed create: %v", err)
+	}
+
+	binding := Binding{
+		Namespace: "default",
+		Name:      "rpc-pod",
+		NodeName:  "worker-1",
+	}
+	bBytes, _ := json.Marshal(binding)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := client.Call(ctx, "pod.bind", bBytes, nil)
+	if err != nil {
+		t.Fatalf("rpc call failed: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("unexpected rpc error: %s", resp.Error)
+	}
+
+	var bound Pod
+	if err := json.Unmarshal(resp.Payload, &bound); err != nil {
+		t.Fatalf("unmarshal payload failed: %v", err)
+	}
+	if bound.Spec.NodeName != "worker-1" {
+		t.Fatalf("expected worker-1, got %s", bound.Spec.NodeName)
+	}
+
+	conflictResp, err := client.Call(ctx, "pod.bind", bBytes, nil)
+	if err != nil {
+		t.Fatalf("second bind call failed: %v", err)
+	}
+	if conflictResp.Error == "" {
+		t.Fatal("expected conflict or error when already assigned")
 	}
 }

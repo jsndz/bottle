@@ -200,22 +200,179 @@ func (s *Server) streamWatch(w http.ResponseWriter, r *http.Request, prefix stri
 	}
 }
 
+func (s *Server) handleBindPod(w http.ResponseWriter, r *http.Request) {
+	ns := r.PathValue("ns")
+	name := r.PathValue("name")
+	var binding Binding
+	if err := json.NewDecoder(r.Body).Decode(&binding); err != nil {
+		writeError(w, err)
+		return
+	}
+	if binding.Namespace == "" {
+		binding.Namespace = ns
+	}
+	if binding.Name == "" {
+		binding.Name = name
+	}
+	if binding.NodeName == "" {
+		writeError(w, errors.New("nodeName required"))
+		return
+	}
+
+	pod, err := s.pods.Get(binding.GetNamespace(), binding.GetName())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if pod.Spec.NodeName != "" {
+		writeError(w, errors.New("pod already assigned"))
+		return
+	}
+	rv := binding.GetResourceVersion()
+	if rv != 0 && pod.Metadata.ResourceVersion != rv {
+		writeError(w, ErrConflict)
+		return
+	}
+	pod.Spec.NodeName = binding.NodeName
+	updated, err := s.pods.Update(pod)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleBindPodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var binding Binding
+	if err := json.Unmarshal(m.Payload, &binding); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	ns := binding.GetNamespace()
+	name := binding.GetName()
+	if name == "" {
+		return rpc.NewUnaryResponse(m, nil, "pod name required")
+	}
+	if binding.NodeName == "" {
+		return rpc.NewUnaryResponse(m, nil, "nodeName required")
+	}
+
+	pod, err := s.pods.Get(ns, name)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	if pod.Spec.NodeName != "" {
+		return rpc.NewUnaryResponse(m, nil, "pod already assigned")
+	}
+	rv := binding.GetResourceVersion()
+	if rv != 0 && pod.Metadata.ResourceVersion != rv {
+		return rpc.NewUnaryResponse(m, nil, ErrConflict.Error())
+	}
+
+	pod.Spec.NodeName = binding.NodeName
+	updated, err := s.pods.Update(pod)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+
+	data, err := json.Marshal(updated)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleGetPodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var req struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	}
+	if err := json.Unmarshal(m.Payload, &req); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	pod, err := s.pods.Get(ns, req.Name)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, err := json.Marshal(pod)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleListPodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	ns := string(m.Payload)
+	list, err := s.pods.ListPods(ns)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, err := json.Marshal(list)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleGetNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	name := string(m.Payload)
+	node, err := s.nodes.Get("", name)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, err := json.Marshal(node)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleListNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	list, err := s.nodes.ListNodes()
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, err := json.Marshal(list)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
 func RegisterWatchRPC(rpcserver *rpc.Server, hub *watch.WatchHub) {
 	rpcserver.Handler.AddStreamHandler("watch.resource", func(ctx context.Context, m *proto.Message, ss *rpc.ServerStream) {
 		prefix := string(m.Payload)
 		watcher := hub.Watch(ctx, prefix)
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-watcher.Buffer:
-			if !ok {
-				ss.Finish()
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			eventBytes, _ := json.Marshal(event)
-			if err := ss.Send(eventBytes); err != nil {
-				return
+			case event, ok := <-watcher.Buffer:
+				if !ok {
+					ss.Finish()
+					return
+				}
+				eventBytes, _ := json.Marshal(event)
+				if err := ss.Send(eventBytes); err != nil {
+					return
+				}
 			}
 		}
 	}, nil)
+}
+
+func (s *Server) RegisterRPC(rpcserver *rpc.Server) {
+	RegisterWatchRPC(rpcserver, s.hub)
+	rpcserver.Handler.AddHandler("pod.bind", s.handleBindPodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.get", s.handleGetPodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.list", s.handleListPodRPC, nil)
+	rpcserver.Handler.AddHandler("node.get", s.handleGetNodeRPC, nil)
+	rpcserver.Handler.AddHandler("node.list", s.handleListNodeRPC, nil)
+}
+
+func RegisterAPIRPC(rpcserver *rpc.Server, server *Server) {
+	server.RegisterRPC(rpcserver)
 }
