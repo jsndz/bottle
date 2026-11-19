@@ -103,7 +103,7 @@ func (r *Registry[T]) Create(obj T) (T, error) {
 	}
 
 	r.store.Apply(cmd)
-	metadata.ResourceVersion = r.store.GlobalRev
+	metadata.ResourceVersion = r.store.Revision()
 	return obj, nil
 }
 
@@ -175,7 +175,7 @@ func (r *Registry[T]) Update(obj T) (T, error) {
 	}
 
 	r.store.Apply(cmd)
-	metadata.ResourceVersion = r.store.GlobalRev
+	metadata.ResourceVersion = r.store.Revision()
 	return obj, nil
 }
 
@@ -220,7 +220,7 @@ func (r *PodRegistry) ListPods(ns string) (*PodList, error) {
 	}
 	return &PodList{
 		TypeMeta: TypeMeta{Kind: "PodList", APIVersion: "v1"},
-		Metadata: ListMeta{ResourceVersion: r.store.GlobalRev},
+		Metadata: ListMeta{ResourceVersion: r.store.Revision()},
 		Items:    items,
 	}, nil
 }
@@ -248,7 +248,7 @@ func (r *NodeRegistry) ListNodes() (*NodeList, error) {
 	}
 	return &NodeList{
 		TypeMeta: TypeMeta{Kind: "NodeList", APIVersion: "v1"},
-		Metadata: ListMeta{ResourceVersion: r.store.GlobalRev},
+		Metadata: ListMeta{ResourceVersion: r.store.Revision()},
 		Items:    items,
 	}, nil
 }

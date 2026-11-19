@@ -35,10 +35,10 @@ func NewCluster(self *Node, srv *rpc.Server, id string) *Cluster {
 }
 
 func (c *Cluster) HeartbeatTicker() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.Tick(5 * time.Second)
 
 	go func() {
-		for range ticker.C {
+		for range ticker {
 			c.Heartbeat()
 		}
 	}()

@@ -68,10 +68,10 @@ func (c *ConnPool) Release(id string) {
 }
 
 func (c *ConnPool) PingTicker() {
-	ticker := time.NewTicker(time.Second * 30)
+	ticker := time.Tick(time.Second * 30)
 
 	go func() {
-		for range ticker.C {
+		for range ticker {
 			c.pingIdleConn()
 		}
 	}()

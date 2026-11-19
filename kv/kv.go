@@ -52,6 +52,12 @@ func (kv *KVStore) GetPrefix(prefix string) []*Record {
 	return kv.Engine.GetPrefix(prefix)
 }
 
+func (kv *KVStore) Revision() int64 {
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
+	return kv.GlobalRev
+}
+
 func (kv *KVStore) Apply(data []byte) any {
 	var cmd Command
 	if err := json.Unmarshal(data, &cmd); err != nil {

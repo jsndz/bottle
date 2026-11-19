@@ -47,8 +47,9 @@ type NodeSpec struct {
 }
 
 type NodeStatus struct {
-	Capacity   NodeResources `json:"capacity"`
-	Conditions []string      `json:"conditions"`
+	Capacity      NodeResources `json:"capacity"`
+	Conditions    []string      `json:"conditions"`
+	LastHeartbeat int64         `json:"lastHeartbeat,omitempty"`
 }
 
 type Node struct {
@@ -142,4 +143,35 @@ func (b *Binding) GetResourceVersion() int64 {
 		return b.ResourceVersion
 	}
 	return b.Metadata.ResourceVersion
+}
+
+func (n *Node) SetReady(ready bool) {
+	if ready {
+		for _, cond := range n.Status.Conditions {
+			if cond == "Ready" {
+				return
+			}
+		}
+		n.Status.Conditions = append(n.Status.Conditions, "Ready")
+	} else {
+		filtered := make([]string, 0, len(n.Status.Conditions))
+		for _, cond := range n.Status.Conditions {
+			if cond != "Ready" {
+				filtered = append(filtered, cond)
+			}
+		}
+		n.Status.Conditions = filtered
+	}
+}
+
+type NodeHeartbeat struct {
+	Name string `json:"name"`
+}
+
+type PodStatusUpdate struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Phase     string `json:"phase"`
+	PodIP     string `json:"podIP,omitempty"`
+	StartTime int64  `json:"startTime,omitempty"`
 }

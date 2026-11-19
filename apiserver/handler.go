@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/jsndz/bottle/rpc"
 	"github.com/jsndz/bottle/rpc/proto"
@@ -342,6 +343,151 @@ func (s *Server) handleListNodeRPC(ctx context.Context, m *proto.Message) *proto
 	return rpc.NewUnaryResponse(m, data, "")
 }
 
+func (s *Server) handleRegisterNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var node Node
+	if err := json.Unmarshal(m.Payload, &node); err != nil || node.Metadata.Name == "" {
+		var partial struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		}
+		if err2 := json.Unmarshal(m.Payload, &partial); err2 == nil && partial.Name != "" {
+			node.Metadata.Name = partial.Name
+			if node.Spec.Address == "" {
+				node.Spec.Address = partial.Address
+			}
+		} else {
+			rawName := string(m.Payload)
+			if rawName != "" {
+				node.Metadata.Name = rawName
+			}
+		}
+	}
+	if node.Metadata.Name == "" {
+		return rpc.NewUnaryResponse(m, nil, "node name required")
+	}
+	if node.Spec.Address == "" {
+		node.Spec.Address = "127.0.0.1:8001"
+	}
+
+	existing, err := s.nodes.Get("", node.Metadata.Name)
+	if err != nil {
+		node.SetReady(true)
+		node.Status.LastHeartbeat = time.Now().Unix()
+		created, createErr := s.nodes.Create(&node)
+		if createErr != nil {
+			return rpc.NewUnaryResponse(m, nil, createErr.Error())
+		}
+		data, _ := json.Marshal(created)
+		return rpc.NewUnaryResponse(m, data, "")
+	}
+
+	existing.Spec.Address = node.Spec.Address
+	if node.Status.Capacity.CPU > 0 {
+		existing.Status.Capacity.CPU = node.Status.Capacity.CPU
+	}
+	if node.Status.Capacity.Memory > 0 {
+		existing.Status.Capacity.Memory = node.Status.Capacity.Memory
+	}
+	existing.SetReady(true)
+	existing.Status.LastHeartbeat = time.Now().Unix()
+
+	updated, updateErr := s.nodes.Update(existing)
+	if updateErr != nil {
+		return rpc.NewUnaryResponse(m, nil, updateErr.Error())
+	}
+	data, _ := json.Marshal(updated)
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleHeartbeatNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var name string
+	var hb NodeHeartbeat
+	if err := json.Unmarshal(m.Payload, &hb); err == nil && hb.Name != "" {
+		name = hb.Name
+	} else {
+		name = string(m.Payload)
+	}
+
+	if name == "" {
+		return rpc.NewUnaryResponse(m, nil, "node name required")
+	}
+
+	node, err := s.nodes.Get("", name)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+
+	node.SetReady(true)
+	node.Status.LastHeartbeat = time.Now().Unix()
+	updated, err := s.nodes.Update(node)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, _ := json.Marshal(updated)
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleUpdateNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var node Node
+	if err := json.Unmarshal(m.Payload, &node); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	updated, err := s.nodes.Update(&node)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, _ := json.Marshal(updated)
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleUpdatePodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var pod Pod
+	if err := json.Unmarshal(m.Payload, &pod); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	updated, err := s.pods.Update(&pod)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, _ := json.Marshal(updated)
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleUpdatePodStatusRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var update PodStatusUpdate
+	if err := json.Unmarshal(m.Payload, &update); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	if update.Name == "" {
+		return rpc.NewUnaryResponse(m, nil, "pod name required")
+	}
+	if update.Namespace == "" {
+		update.Namespace = "default"
+	}
+
+	pod, err := s.pods.Get(update.Namespace, update.Name)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+
+	if update.Phase != "" {
+		pod.Status.Phase = update.Phase
+	}
+	if update.PodIP != "" {
+		pod.Status.PodIP = update.PodIP
+	}
+	if update.StartTime > 0 {
+		pod.Status.StartTime = update.StartTime
+	}
+
+	updated, err := s.pods.Update(pod)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, _ := json.Marshal(updated)
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
 func RegisterWatchRPC(rpcserver *rpc.Server, hub *watch.WatchHub) {
 	rpcserver.Handler.AddStreamHandler("watch.resource", func(ctx context.Context, m *proto.Message, ss *rpc.ServerStream) {
 		prefix := string(m.Payload)
@@ -369,8 +515,13 @@ func (s *Server) RegisterRPC(rpcserver *rpc.Server) {
 	rpcserver.Handler.AddHandler("pod.bind", s.handleBindPodRPC, nil)
 	rpcserver.Handler.AddHandler("pod.get", s.handleGetPodRPC, nil)
 	rpcserver.Handler.AddHandler("pod.list", s.handleListPodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.update", s.handleUpdatePodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.updateStatus", s.handleUpdatePodStatusRPC, nil)
+	rpcserver.Handler.AddHandler("node.register", s.handleRegisterNodeRPC, nil)
+	rpcserver.Handler.AddHandler("node.heartbeat", s.handleHeartbeatNodeRPC, nil)
 	rpcserver.Handler.AddHandler("node.get", s.handleGetNodeRPC, nil)
 	rpcserver.Handler.AddHandler("node.list", s.handleListNodeRPC, nil)
+	rpcserver.Handler.AddHandler("node.update", s.handleUpdateNodeRPC, nil)
 }
 
 func RegisterAPIRPC(rpcserver *rpc.Server, server *Server) {

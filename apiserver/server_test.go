@@ -337,3 +337,89 @@ func TestRPCServerBindPod(t *testing.T) {
 		t.Fatal("expected conflict or error when already assigned")
 	}
 }
+
+func TestRPCServerNodeRegistrationAndHeartbeat(t *testing.T) {
+	s, _, _, _ := setupTestServer(t)
+
+	rpcServer := rpc.NewServer("0")
+	s.RegisterRPC(rpcServer)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	defer lis.Close()
+
+	go rpcServer.ServeListener(lis)
+
+	pool := rpc.NewGlobalPool()
+	client := rpc.NewClient(lis.Addr().String(), pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	nodePayload, _ := json.Marshal(Node{
+		Metadata: Metadata{Name: "worker-agent-1"},
+		Spec:     NodeSpec{Address: "127.0.0.1:8001"},
+		Status: NodeStatus{
+			Capacity: NodeResources{CPU: 4, Memory: 8192},
+		},
+	})
+
+	resp, err := client.Call(ctx, "node.register", nodePayload, nil)
+	if err != nil || resp.Error != "" {
+		t.Fatalf("node.register failed: %v, %s", err, resp.Error)
+	}
+
+	var regNode Node
+	_ = json.Unmarshal(resp.Payload, &regNode)
+	if !regNode.IsReady() || regNode.Status.LastHeartbeat == 0 {
+		t.Fatalf("expected node to be ready with heartbeat, got %+v", regNode)
+	}
+
+	nodePayload2, _ := json.Marshal(Node{
+		Metadata: Metadata{Name: "worker-agent-1"},
+		Spec:     NodeSpec{Address: "127.0.0.1:8002"},
+	})
+	resp, err = client.Call(ctx, "node.register", nodePayload2, nil)
+	if err != nil || resp.Error != "" {
+		t.Fatalf("second node.register failed: %v, %s", err, resp.Error)
+	}
+	var regNode2 Node
+	_ = json.Unmarshal(resp.Payload, &regNode2)
+	if regNode2.Spec.Address != "127.0.0.1:8002" {
+		t.Fatalf("expected updated address 127.0.0.1:8002, got %s", regNode2.Spec.Address)
+	}
+
+	hbPayload, _ := json.Marshal(NodeHeartbeat{Name: "worker-agent-1"})
+	hbResp, err := client.Call(ctx, "node.heartbeat", hbPayload, nil)
+	if err != nil || hbResp.Error != "" {
+		t.Fatalf("node.heartbeat failed: %v, %s", err, hbResp.Error)
+	}
+
+	pod := Pod{
+		Metadata: Metadata{Name: "status-pod", Namespace: "default"},
+		Spec:     PodSpec{Containers: []Container{{Name: "c1", Image: "img"}}},
+	}
+	_, err = s.pods.Create(&pod)
+	if err != nil {
+		t.Fatalf("failed create pod: %v", err)
+	}
+
+	statusPayload, _ := json.Marshal(PodStatusUpdate{
+		Namespace: "default",
+		Name:      "status-pod",
+		Phase:     "Running",
+		PodIP:     "10.0.0.1",
+	})
+	statusResp, err := client.Call(ctx, "pod.updateStatus", statusPayload, nil)
+	if err != nil || statusResp.Error != "" {
+		t.Fatalf("pod.updateStatus failed: %v, %s", err, statusResp.Error)
+	}
+
+	var updatedPod Pod
+	_ = json.Unmarshal(statusResp.Payload, &updatedPod)
+	if updatedPod.Status.Phase != "Running" || updatedPod.Status.PodIP != "10.0.0.1" {
+		t.Fatalf("expected Running and 10.0.0.1, got %+v", updatedPod)
+	}
+}
