@@ -1,6 +1,9 @@
 package controllerruntime
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type WorkQueue struct {
 	mu           sync.Mutex
@@ -9,6 +12,7 @@ type WorkQueue struct {
 	processing   map[string]bool
 	cond         *sync.Cond
 	shuttingDown bool
+	failures     map[string]int
 }
 
 func NewWorkQueue() *WorkQueue {
@@ -16,6 +20,7 @@ func NewWorkQueue() *WorkQueue {
 		queue:        make([]string, 0),
 		dirty:        make(map[string]bool),
 		processing:   make(map[string]bool),
+		failures:     make(map[string]int),
 		shuttingDown: false,
 	}
 	w.cond = sync.NewCond(&w.mu)
@@ -25,38 +30,96 @@ func NewWorkQueue() *WorkQueue {
 func (w *WorkQueue) Add(key string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.dirty[key] == true {
+	if w.shuttingDown {
+		return
+	}
+	if w.dirty[key] {
 		return
 	}
 	w.dirty[key] = true
-	if w.processing[key] == true {
+	if w.processing[key] {
 		return
 	}
 	w.queue = append(w.queue, key)
 	w.cond.Signal()
 }
 
-func (w *WorkQueue) Get() string {
+func (w *WorkQueue) Get() (string, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var key string
-	for len(w.queue) == 0 {
+	for len(w.queue) == 0 && !w.shuttingDown {
 		w.cond.Wait()
 	}
-	key = w.queue[0]
+	if len(w.queue) == 0 {
+		return "", true
+	}
+	key := w.queue[0]
 	w.queue = w.queue[1:]
 	w.processing[key] = true
 	delete(w.dirty, key)
-	return key
+	return key, false
 }
 
 func (w *WorkQueue) Done(key string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	delete(w.processing, key)
-	if w.dirty[key] == true {
+	if w.dirty[key] {
 		w.queue = append(w.queue, key)
 		w.cond.Signal()
 	}
+}
+
+func (w *WorkQueue) ShutDown() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.shuttingDown = true
+	w.cond.Broadcast()
+}
+
+func (w *WorkQueue) ShuttingDown() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.shuttingDown
+}
+
+func (w *WorkQueue) AddAfter(key string, duration time.Duration) {
+	if duration <= 0 {
+		w.Add(key)
+		return
+	}
+	time.AfterFunc(duration, func() {
+		w.Add(key)
+	})
+}
+
+func (w *WorkQueue) AddRateLimited(key string) {
+	w.mu.Lock()
+	count := w.failures[key]
+	w.failures[key] = count + 1
+	w.mu.Unlock()
+
+	delay := time.Duration(1<<count) * 5 * time.Millisecond
+	if delay > 1*time.Minute {
+		delay = 1 * time.Minute
+	}
+	w.AddAfter(key, delay)
+}
+
+func (w *WorkQueue) Forget(key string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.failures, key)
+}
+
+func (w *WorkQueue) NumRequeues(key string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.failures[key]
+}
+
+func (w *WorkQueue) Len() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.queue)
 }

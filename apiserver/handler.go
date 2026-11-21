@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jsndz/bottle/rpc"
@@ -318,6 +319,46 @@ func (s *Server) handleListPodRPC(ctx context.Context, m *proto.Message) *proto.
 	return rpc.NewUnaryResponse(m, data, "")
 }
 
+func (s *Server) handleCreatePodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var pod Pod
+	if err := json.Unmarshal(m.Payload, &pod); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	created, err := s.pods.Create(&pod)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	data, err := json.Marshal(created)
+	if err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, data, "")
+}
+
+func (s *Server) handleDeletePodRPC(ctx context.Context, m *proto.Message) *proto.Message {
+	var req struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	}
+	if err := json.Unmarshal(m.Payload, &req); err != nil || req.Name == "" {
+		key := string(m.Payload)
+		parts := strings.Split(strings.Trim(key, "/"), "/")
+		if len(parts) >= 2 {
+			req.Namespace = parts[0]
+			req.Name = parts[1]
+		} else if len(parts) == 1 {
+			req.Name = parts[0]
+		}
+	}
+	if req.Namespace == "" {
+		req.Namespace = "default"
+	}
+	if err := s.pods.Delete(req.Namespace, req.Name); err != nil {
+		return rpc.NewUnaryResponse(m, nil, err.Error())
+	}
+	return rpc.NewUnaryResponse(m, []byte(`{"status":"deleted"}`), "")
+}
+
 func (s *Server) handleGetNodeRPC(ctx context.Context, m *proto.Message) *proto.Message {
 	name := string(m.Payload)
 	node, err := s.nodes.Get("", name)
@@ -513,6 +554,8 @@ func RegisterWatchRPC(rpcserver *rpc.Server, hub *watch.WatchHub) {
 func (s *Server) RegisterRPC(rpcserver *rpc.Server) {
 	RegisterWatchRPC(rpcserver, s.hub)
 	rpcserver.Handler.AddHandler("pod.bind", s.handleBindPodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.create", s.handleCreatePodRPC, nil)
+	rpcserver.Handler.AddHandler("pod.delete", s.handleDeletePodRPC, nil)
 	rpcserver.Handler.AddHandler("pod.get", s.handleGetPodRPC, nil)
 	rpcserver.Handler.AddHandler("pod.list", s.handleListPodRPC, nil)
 	rpcserver.Handler.AddHandler("pod.update", s.handleUpdatePodRPC, nil)
